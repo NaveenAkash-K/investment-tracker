@@ -3,7 +3,12 @@ import { createClient } from "@/lib/supabase/server";
 import { PageHeader } from "@/components/page-header";
 import { StatusBanner } from "@/components/status-banner";
 import { MonthlyReviewForm, type MonthlyReviewFormRow } from "@/components/monthly-review-form";
-import { getIndiaMonthStart, type TrackingCurrency } from "@/lib/performance";
+import {
+    buildMonthlyPortfolioReturns,
+    calculateLinkedReturn,
+    getIndiaMonthStart,
+    type TrackingCurrency,
+} from "@/lib/performance";
 import { saveMonthlyReview } from "./actions";
 
 type SearchParams = Promise<{ success?: string; error?: string }>;
@@ -23,7 +28,7 @@ export default async function MonthlyReviewPage({ searchParams }: { searchParams
         supabase.from("asset_categories").select("id, name, sort_order, tracking_currency").eq("user_id", user.id).order("sort_order"),
         supabase.from("holdings").select("category_id, currency, current_value, current_value_inr, exchange_rate_to_inr").eq("user_id", user.id).eq("is_active", true),
         supabase.from("sip_plans").select("category_id, monthly_amount").eq("user_id", user.id).eq("is_active", true),
-        supabase.from("monthly_category_performance").select("category_id, performance_month, is_baseline, contribution_inr, contribution_native, contribution_fx_rate, closing_native_value, closing_fx_rate, market_gain_inr, currency_gain_inr, combined_gain_inr").eq("user_id", user.id).order("performance_month", { ascending: false }),
+        supabase.from("monthly_category_performance").select("category_id, performance_month, is_baseline, opening_value_inr, contribution_inr, contribution_native, contribution_fx_rate, closing_native_value, closing_fx_rate, market_gain_inr, currency_gain_inr, combined_gain_inr").eq("user_id", user.id).order("performance_month", { ascending: false }),
         supabase.from("profiles").select("default_usd_inr_rate").eq("user_id", user.id).maybeSingle(),
     ]);
 
@@ -102,6 +107,21 @@ export default async function MonthlyReviewPage({ searchParams }: { searchParams
         combined: result.combined + toNumber(row.combined_gain_inr),
     }), { contribution: 0, market: 0, currency: 0, combined: 0 });
 
+    const monthlyReturns = buildMonthlyPortfolioReturns(history.map((row) => ({
+        performanceMonth: row.performance_month,
+        isBaseline: Boolean(row.is_baseline),
+        openingValueInr: toNumber(row.opening_value_inr),
+        contributionInr: toNumber(row.contribution_inr),
+        marketGainInr: toNumber(row.market_gain_inr),
+        currencyGainInr: toNumber(row.currency_gain_inr),
+        combinedGainInr: toNumber(row.combined_gain_inr),
+    })));
+    const currentReturn = monthlyReturns.find((row) => row.performanceMonth === month);
+    const recentReturns = monthlyReturns.slice(-6).reverse();
+    const rolling3 = calculateLinkedReturn(monthlyReturns, 3);
+    const rolling6 = calculateLinkedReturn(monthlyReturns, 6);
+    const rolling12 = calculateLinkedReturn(monthlyReturns, 12);
+
     const formatCurrency = (value: number) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(value);
 
     return (
@@ -111,14 +131,61 @@ export default async function MonthlyReviewPage({ searchParams }: { searchParams
 
             <section className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <Summary label="Actual contribution" value={formatCurrency(totals.contribution)} helper="Confirmed, not planned SIP" />
-                <Summary label="Market movement" value={formatCurrency(totals.market)} helper="Contribution excluded" tone={totals.market} />
-                <Summary label="Currency movement" value={formatCurrency(totals.currency)} helper="USD/INR impact" tone={totals.currency} />
-                <Summary label="Combined gain/loss" value={formatCurrency(totals.combined)} helper="Market plus currency" tone={totals.combined} />
+                <Summary label="Market movement" value={formatCurrency(totals.market)} helper={returnHelper(currentReturn?.marketReturnPercentage, "Contribution-adjusted")} tone={totals.market} />
+                <Summary label="Currency movement" value={formatCurrency(totals.currency)} helper={returnHelper(currentReturn?.currencyReturnPercentage, "USD/INR return")} tone={totals.currency} />
+                <Summary label="Combined gain/loss" value={formatCurrency(totals.combined)} helper={returnHelper(currentReturn?.combinedReturnPercentage, "Total return")} tone={totals.combined} />
             </section>
 
             <section className="mb-6 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm leading-6 text-blue-900">
                 <p className="font-semibold">One quick update per month</p>
                 <p className="mt-1">Update native holding values first, then confirm actual contributions here. USD categories also capture the conversion and closing exchange rates. A category’s first saved month establishes its baseline.</p>
+            </section>
+
+            <section className="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white">
+                <div className="border-b border-slate-100 px-5 py-4">
+                    <h2 className="text-lg font-semibold text-slate-950">Contribution-adjusted returns</h2>
+                    <p className="mt-1 text-sm leading-6 text-slate-500">
+                        Gain divided by opening value plus confirmed contribution. This approximation matches your usual start-of-month investment timing.
+                    </p>
+                </div>
+                <div className="grid gap-3 p-5 sm:grid-cols-3">
+                    <ReturnSummary label="Rolling 3 months" value={rolling3} />
+                    <ReturnSummary label="Rolling 6 months" value={rolling6} />
+                    <ReturnSummary label="Rolling 12 months" value={rolling12} />
+                </div>
+                {recentReturns.length > 0 ? (
+                    <div className="overflow-x-auto border-t border-slate-100">
+                        <table className="w-full min-w-[760px] text-left text-sm">
+                            <caption className="sr-only">Recent contribution-adjusted monthly portfolio returns</caption>
+                            <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                                <tr>
+                                    <th className="px-5 py-3">Review month</th>
+                                    <th className="px-5 py-3 text-right">Capital base</th>
+                                    <th className="px-5 py-3 text-right">Contribution</th>
+                                    <th className="px-5 py-3 text-right">Market return</th>
+                                    <th className="px-5 py-3 text-right">Currency return</th>
+                                    <th className="px-5 py-3 text-right">Combined return</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {recentReturns.map((row) => (
+                                    <tr key={row.performanceMonth}>
+                                        <td className="px-5 py-4 font-medium text-slate-950">
+                                            {formatMonth(row.performanceMonth)}
+                                            {row.baselineRows > 0 && row.trackedRows === 0 ? <span className="ml-2 rounded-full bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700">Baseline</span> : null}
+                                            {row.baselineRows > 0 && row.trackedRows > 0 ? <span className="ml-2 rounded-full bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700">Partial</span> : null}
+                                        </td>
+                                        <td className="px-5 py-4 text-right tabular-nums">{row.capitalBaseInr > 0 ? formatCurrency(row.capitalBaseInr) : "—"}</td>
+                                        <td className="px-5 py-4 text-right tabular-nums">{formatCurrency(row.contributionInr)}</td>
+                                        <ReturnCell value={row.marketReturnPercentage} />
+                                        <ReturnCell value={row.currencyReturnPercentage} />
+                                        <ReturnCell value={row.combinedReturnPercentage} strong />
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                ) : <p className="border-t border-slate-100 p-5 text-sm text-slate-500">Save the first monthly review to establish the performance baseline.</p>}
             </section>
 
             {formRows.length > 0 ? <MonthlyReviewForm rows={formRows} action={saveMonthlyReview} /> : <div className="rounded-xl border bg-white p-8 text-center text-slate-500">Create an asset category first.</div>}
@@ -128,4 +195,34 @@ export default async function MonthlyReviewPage({ searchParams }: { searchParams
 
 function Summary({ label, value, helper, tone }: { label: string; value: string; helper: string; tone?: number }) {
     return <div className="rounded-xl border border-slate-200 bg-white p-5"><p className="text-sm font-medium text-slate-500">{label}</p><p className={`mt-2 text-2xl font-bold ${tone === undefined || tone === 0 ? "text-slate-950" : tone > 0 ? "text-emerald-700" : "text-red-700"}`}>{value}</p><p className="mt-1 text-sm text-slate-500">{helper}</p></div>;
+}
+
+function formatReturn(value: number | null | undefined) {
+    if (value === null || value === undefined) return "Not available";
+    return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
+}
+
+function returnHelper(value: number | null | undefined, label: string) {
+    return value === null || value === undefined
+        ? "Available after baseline"
+        : `${label}: ${formatReturn(value)}`;
+}
+
+function formatMonth(value: string) {
+    return new Intl.DateTimeFormat("en-IN", { month: "short", year: "numeric", timeZone: "UTC" })
+        .format(new Date(`${value.slice(0, 10)}T00:00:00Z`));
+}
+
+function ReturnSummary({ label, value }: { label: string; value: number | null }) {
+    const tone = value === null || value === 0
+        ? "text-slate-950"
+        : value > 0 ? "text-emerald-700" : "text-red-700";
+    return <div className="rounded-lg bg-slate-50 p-4"><p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p><p className={`mt-2 text-xl font-bold ${tone}`}>{formatReturn(value)}</p><p className="mt-1 text-xs text-slate-400">Requires consecutive non-baseline reviews</p></div>;
+}
+
+function ReturnCell({ value, strong = false }: { value: number | null; strong?: boolean }) {
+    const tone = value === null || value === 0
+        ? "text-slate-500"
+        : value > 0 ? "text-emerald-700" : "text-red-700";
+    return <td className={`px-5 py-4 text-right tabular-nums ${strong ? "font-semibold" : ""} ${tone}`}>{formatReturn(value)}</td>;
 }

@@ -11,6 +11,8 @@ USD categories separate:
 
 The first enhanced monthly review is a baseline. Accurate market and currency attribution starts with the following month; historical snapshots are retained as value-only history.
 
+The Targets page includes a new-money allocation autopilot. It uses the entered budget to reduce target drift without selling and does not change SIP plans automatically. Monthly Review and Dashboard show contribution-adjusted monthly returns plus linked 3, 6, and 12-month returns once enough consecutive non-baseline reviews exist.
+
 ## Local setup
 
 1. Install packages with `npm install`.
@@ -37,6 +39,8 @@ The service-role key must never be placed in `.env.local`, browser code or any p
 2. Open Monthly Review.
 3. Confirm the actual contribution for each category. For USD categories, confirm the conversion rate, USD received, and closing USD/INR rate.
 4. Save the review, then create the month's snapshot.
+
+Before investing, the Targets page can calculate how the available new money would be distributed across underweight categories. The active SIP total is used as the default budget and can be changed for a one-off contribution.
 
 Planned SIP values are only prefills; they are not counted as invested until confirmed in Monthly Review.
 

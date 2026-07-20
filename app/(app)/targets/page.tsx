@@ -8,6 +8,7 @@ import {PageHeader} from "@/components/page-header";
 import { contributionNeededWithoutSelling } from "@/lib/performance";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { FormSubmitButton } from "@/components/form-submit-button";
+import { NewMoneyAllocationAutopilot } from "@/components/new-money-allocation-autopilot";
 
 type Category = {
     id: string;
@@ -302,6 +303,17 @@ export default async function TargetsPage() {
                         helper="Asset allocation groups"
                     />
                 </section>
+
+                <NewMoneyAllocationAutopilot
+                    defaultBudget={totalMonthlySip}
+                    rows={rows.map((row) => ({
+                        categoryId: row.categoryId,
+                        categoryName: row.categoryName,
+                        currentAmount: row.currentAmount,
+                        targetPercentage: row.targetPercentage,
+                        plannedAmount: row.monthlySip,
+                    }))}
+                />
 
                 {warnings.length > 0 && (
                     <section className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-5">

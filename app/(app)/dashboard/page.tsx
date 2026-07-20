@@ -2,7 +2,11 @@ import {redirect} from "next/navigation";
 import {createClient} from "@/lib/supabase/server";
 import {PageHeader} from "@/components/page-header";
 import Link from "next/link";
-import { getIndiaMonthStart } from "@/lib/performance";
+import {
+    buildMonthlyPortfolioReturns,
+    calculateLinkedReturn,
+    getIndiaMonthStart,
+} from "@/lib/performance";
 
 type Category = {
     id: string;
@@ -42,6 +46,8 @@ type InvestmentNote = {
 
 type MonthlyPerformance = {
     performance_month: string;
+    is_baseline: boolean;
+    opening_value_inr: number | string | null;
     contribution_inr: number | string | null;
     market_gain_inr: number | string | null;
     currency_gain_inr: number | string | null;
@@ -185,10 +191,10 @@ export default async function DashboardPage() {
 
         supabase
             .from("monthly_category_performance")
-            .select("performance_month, contribution_inr, market_gain_inr, currency_gain_inr, combined_gain_inr")
+            .select("performance_month, is_baseline, opening_value_inr, contribution_inr, market_gain_inr, currency_gain_inr, combined_gain_inr")
             .eq("user_id", user.id)
             .order("performance_month", {ascending: false})
-            .limit(24),
+            .limit(120),
     ]);
 
     const queryError =
@@ -222,6 +228,19 @@ export default async function DashboardPage() {
     const monthlyMarketGain = latestPerformance.reduce((sum, row) => sum + toNumber(row.market_gain_inr), 0);
     const monthlyCurrencyGain = latestPerformance.reduce((sum, row) => sum + toNumber(row.currency_gain_inr), 0);
     const monthlyCombinedGain = latestPerformance.reduce((sum, row) => sum + toNumber(row.combined_gain_inr), 0);
+    const monthlyReturns = buildMonthlyPortfolioReturns(performanceRows.map((row) => ({
+        performanceMonth: row.performance_month,
+        isBaseline: Boolean(row.is_baseline),
+        openingValueInr: toNumber(row.opening_value_inr),
+        contributionInr: toNumber(row.contribution_inr),
+        marketGainInr: toNumber(row.market_gain_inr),
+        currencyGainInr: toNumber(row.currency_gain_inr),
+        combinedGainInr: toNumber(row.combined_gain_inr),
+    })));
+    const latestReturn = monthlyReturns.find((row) => row.performanceMonth === latestPerformanceMonth);
+    const rolling3 = calculateLinkedReturn(monthlyReturns, 3);
+    const rolling6 = calculateLinkedReturn(monthlyReturns, 6);
+    const rolling12 = calculateLinkedReturn(monthlyReturns, 12);
 
     const targetByCategoryId = new Map<string, number>();
     const amountByCategoryId = new Map<string, number>();
@@ -330,7 +349,7 @@ export default async function DashboardPage() {
                     <SummaryCard
                         label="Latest real growth"
                         value={latestPerformanceMonth ? formatCurrency(monthlyCombinedGain) : "Not tracked"}
-                        helper={latestPerformanceMonth ? formatMonthLabel(latestPerformanceMonth) : "Start a monthly review"}
+                        helper={latestPerformanceMonth ? `${formatMonthLabel(latestPerformanceMonth)} · ${formatReturn(latestReturn?.combinedReturnPercentage)}` : "Start a monthly review"}
                     />
                 </section>
 
@@ -341,10 +360,16 @@ export default async function DashboardPage() {
                     </div>
                     {latestPerformanceMonth ? <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                         <Metric label="Actual contribution" value={monthlyContribution} />
-                        <Metric label="Market gain/loss" value={monthlyMarketGain} signed />
-                        <Metric label="Currency gain/loss" value={monthlyCurrencyGain} signed />
-                        <Metric label="Combined gain/loss" value={monthlyCombinedGain} signed />
+                        <Metric label="Market gain/loss" value={monthlyMarketGain} returnPercentage={latestReturn?.marketReturnPercentage} signed />
+                        <Metric label="Currency gain/loss" value={monthlyCurrencyGain} returnPercentage={latestReturn?.currencyReturnPercentage} signed />
+                        <Metric label="Combined gain/loss" value={monthlyCombinedGain} returnPercentage={latestReturn?.combinedReturnPercentage} signed />
                     </div> : <p className="mt-5 rounded-lg bg-blue-50 p-4 text-sm text-blue-800">Your first monthly review creates the baseline. Accurate market and currency gains begin from the next month.</p>}
+                    {latestPerformanceMonth ? <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                        <RollingMetric label="Rolling 3 months" value={rolling3} />
+                        <RollingMetric label="Rolling 6 months" value={rolling6} />
+                        <RollingMetric label="Rolling 12 months" value={rolling12} />
+                    </div> : null}
+                    <p className="mt-4 text-xs leading-5 text-slate-400">Returns use opening value plus confirmed contribution as the capital base, matching start-of-month investing. Rolling values require consecutive non-baseline reviews.</p>
                 </section>
 
                 {warnings.length > 0 && (
@@ -545,7 +570,27 @@ function formatMonthLabel(value: string) {
         .format(new Date(`${value.slice(0, 10)}T00:00:00Z`));
 }
 
-function Metric({ label, value, signed = false }: { label: string; value: number; signed?: boolean }) {
+function formatReturn(value: number | null | undefined) {
+    if (value === null || value === undefined) return "Return available after baseline";
+    return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
+}
+
+function Metric({
+                    label,
+                    value,
+                    signed = false,
+                    returnPercentage,
+                }: {
+    label: string;
+    value: number;
+    signed?: boolean;
+    returnPercentage?: number | null;
+}) {
     const tone = signed ? (value > 0 ? "text-emerald-700" : value < 0 ? "text-red-700" : "text-slate-950") : "text-slate-950";
-    return <div className="rounded-lg bg-slate-50 p-4"><p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p><p className={`mt-2 text-xl font-bold ${tone}`}>{formatCurrency(value)}</p></div>;
+    return <div className="rounded-lg bg-slate-50 p-4"><p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p><p className={`mt-2 text-xl font-bold ${tone}`}>{formatCurrency(value)}</p>{returnPercentage !== undefined ? <p className={`mt-1 text-xs font-medium ${tone}`}>{formatReturn(returnPercentage)}</p> : null}</div>;
+}
+
+function RollingMetric({ label, value }: { label: string; value: number | null }) {
+    const tone = value === null || value === 0 ? "text-slate-700" : value > 0 ? "text-emerald-700" : "text-red-700";
+    return <div className="rounded-lg border border-slate-100 p-3"><p className="text-xs font-medium text-slate-500">{label}</p><p className={`mt-1 font-semibold ${tone}`}>{value === null ? "Not enough history" : formatReturn(value)}</p></div>;
 }
