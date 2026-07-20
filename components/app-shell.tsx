@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, type ReactNode } from "react";
 import {
+    Activity,
     Archive,
     BarChart3,
     BrainCircuit,
@@ -25,6 +26,7 @@ const navItems = [
     { href: "/dashboard", label: "Dashboard", description: "Portfolio overview", icon: Gauge },
     { href: "/monthly-review", label: "Monthly Review", description: "Growth & currency", icon: TrendingUp },
     { href: "/market-intelligence", label: "Market Intelligence", description: "Signals & SIP decisions", icon: BrainCircuit },
+    { href: "/swing-lab", label: "Swing Lab", description: "Candidates & trade journal", icon: Activity },
     { href: "/holdings", label: "Holdings", description: "Current assets", icon: WalletCards },
     { href: "/sip-plan", label: "SIP Plan", description: "Planned investments", icon: PiggyBank },
     { href: "/targets", label: "Targets", description: "Allocation goals", icon: Target },

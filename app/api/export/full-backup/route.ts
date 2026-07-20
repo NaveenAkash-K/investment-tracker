@@ -9,6 +9,8 @@ const TABLES = [
     "market_signal_runs", "market_signal_scores", "sip_signal_recommendations",
     "global_signal_recommendations", "market_signal_alerts",
     "category_signal_mappings", "sip_signal_mappings",
+    "swing_lab_settings", "swing_scan_runs", "swing_candidates",
+    "swing_trades", "swing_trade_events",
 ] as const;
 
 export async function GET() {
