@@ -17,6 +17,12 @@ function toNumber(value: unknown): number {
     return Number.isFinite(numberValue) ? numberValue : 0;
 }
 
+type HoldingExport = { name: string; asset_type: string | null; currency: string | null; current_value: unknown; exchange_rate_to_inr: unknown; current_value_inr: unknown; notes: string | null; is_active: boolean | null; last_updated_at: string | null; asset_categories: { name: string | null } | null };
+type SipExport = { name: string; monthly_amount: unknown; sip_day: number | null; notes: string | null; is_active: boolean | null; asset_categories: { name: string | null } | null };
+type TargetExport = { target_percentage: unknown; asset_categories: { name: string | null; sort_order: number | null } | null };
+type SnapshotCategoryExport = { snapshot_id: string; category_name: string; amount_inr: unknown; current_percentage: unknown; target_percentage: unknown; difference_percentage: unknown };
+type SnapshotSipExport = { snapshot_id: string; category_name: string; name: string; monthly_amount: unknown };
+
 export async function GET(
     _request: Request,
     context: { params: Promise<{ kind: string }> }
@@ -58,7 +64,7 @@ export async function GET(
             return NextResponse.json({ error: error.message }, { status: 500 });
         }
 
-        const rows = (data ?? []).map((holding: any) => ({
+        const rows = ((data ?? []) as unknown as HoldingExport[]).map((holding) => ({
             name: holding.name,
             category: holding.asset_categories?.name ?? "",
             asset_type: holding.asset_type ?? "",
@@ -111,7 +117,7 @@ export async function GET(
             return NextResponse.json({ error: error.message }, { status: 500 });
         }
 
-        const rows = (data ?? []).map((sip: any) => ({
+        const rows = ((data ?? []) as unknown as SipExport[]).map((sip) => ({
             name: sip.name,
             category: sip.asset_categories?.name ?? "",
             monthly_amount: sip.monthly_amount ?? 0,
@@ -144,8 +150,8 @@ export async function GET(
             return NextResponse.json({ error: error.message }, { status: 500 });
         }
 
-        const rows = (data ?? [])
-            .map((target: any) => ({
+        const rows = ((data ?? []) as unknown as TargetExport[])
+            .map((target) => ({
                 category: target.asset_categories?.name ?? "",
                 target_percentage: target.target_percentage ?? 0,
                 sort_order: target.asset_categories?.sort_order ?? 999,
@@ -194,16 +200,16 @@ export async function GET(
             return NextResponse.json({ error: queryError.message }, { status: 500 });
         }
 
-        const categoriesBySnapshot = new Map<string, any[]>();
-        const sipsBySnapshot = new Map<string, any[]>();
+        const categoriesBySnapshot = new Map<string, SnapshotCategoryExport[]>();
+        const sipsBySnapshot = new Map<string, SnapshotSipExport[]>();
 
-        for (const category of categoriesResult.data ?? []) {
+        for (const category of (categoriesResult.data ?? []) as SnapshotCategoryExport[]) {
             const existing = categoriesBySnapshot.get(category.snapshot_id) ?? [];
             existing.push(category);
             categoriesBySnapshot.set(category.snapshot_id, existing);
         }
 
-        for (const sip of sipsResult.data ?? []) {
+        for (const sip of (sipsResult.data ?? []) as SnapshotSipExport[]) {
             const existing = sipsBySnapshot.get(sip.snapshot_id) ?? [];
             existing.push(sip);
             sipsBySnapshot.set(sip.snapshot_id, existing);

@@ -1,6 +1,7 @@
-import type { ReactNode } from "react";
 import { PageHeader } from "@/components/page-header";
-import { importHoldings, importSipPlans, importTargets } from "./actions";
+import { importHoldings, importSipPlans, importTargets, restoreFullBackup } from "./actions";
+import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
+import { FormSubmitButton } from "@/components/form-submit-button";
 
 const holdingsTemplate = `name,category,asset_type,currency,current_value,exchange_rate_to_inr,notes
 Parag Parikh Flexi Cap Fund,Indian Assets,Mutual Fund,INR,48628.53,1,Flexi cap
@@ -30,6 +31,12 @@ export default function ImportExportPage() {
 
                 <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                     <ExportCard
+                        title="Full JSON backup"
+                        description="The complete restorable backup, including archived records, notes, snapshots, and monthly performance."
+                        href="/api/export/full-backup"
+                        label="Download full backup"
+                    />
+                    <ExportCard
                         title="Holdings"
                         description="Download all holdings, including archived rows."
                         href="/api/export/holdings"
@@ -49,6 +56,17 @@ export default function ImportExportPage() {
                         description="Download historical snapshots, category rows, SIP rows, and notes."
                         href="/api/export/snapshots"
                     />
+                </section>
+
+                <section className="mt-6 rounded-xl border border-red-200 bg-white p-5">
+                    <h2 className="text-lg font-semibold text-slate-950">Restore a full backup</h2>
+                    <p className="mt-2 text-sm leading-6 text-slate-600">This replaces all tracker data in your account in one database transaction. Your login account is not changed.</p>
+                    <form action={restoreFullBackup} className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+                        <label className="flex-1 text-sm font-medium text-slate-700">JSON backup
+                            <input name="file" type="file" accept=".json,application/json" required className="mt-1 block w-full rounded-lg border border-slate-200 p-2 text-sm" />
+                        </label>
+                        <ConfirmSubmitButton confirmation="Replace all current tracker data with this backup? This cannot be undone unless you have another backup." pendingLabel="Restoring…" className="rounded-lg bg-red-700 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50">Restore backup</ConfirmSubmitButton>
+                    </form>
                 </section>
 
                 <section className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-5">
@@ -113,15 +131,16 @@ export default function ImportExportPage() {
         </main>
     );
 }
-
 function ExportCard({
                         title,
                         description,
                         href,
+                        label = "Export CSV",
                     }: {
     title: string;
     description: string;
     href: string;
+    label?: string;
 }) {
     return (
         <div className="rounded-xl border border-slate-200 bg-white p-5">
@@ -132,7 +151,7 @@ function ExportCard({
                 href={href}
                 className="mt-4 inline-flex rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800"
             >
-                Export CSV
+                {label}
             </a>
         </div>
     );
@@ -185,12 +204,11 @@ function ImportCard({
                     </label>
                 )}
 
-                <button
-                    type="submit"
-                    className="rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800"
-                >
-                    Import CSV
-                </button>
+                {replaceLabel ? (
+                    <ConfirmSubmitButton confirmation="Import this CSV? If replace existing is checked, the current active rows will be archived in the same transaction." pendingText="Importing…" className="border-0 bg-slate-950 px-4 py-2.5 text-white hover:bg-slate-800">Import CSV</ConfirmSubmitButton>
+                ) : (
+                    <FormSubmitButton pendingText="Importing…">Import CSV</FormSubmitButton>
+                )}
             </form>
 
             <details className="mt-5 rounded-lg border border-slate-200">
@@ -199,17 +217,9 @@ function ImportCard({
                 </summary>
 
                 <pre className="overflow-x-auto border-t border-slate-200 bg-slate-50 p-4 text-xs leading-5 text-slate-700">
-          {template}
-        </pre>
+                    {template}
+                </pre>
             </details>
-        </div>
-    );
-}
-
-function InfoBox({ children }: { children: ReactNode }) {
-    return (
-        <div className="rounded-lg bg-slate-50 p-4 text-sm leading-6 text-slate-600">
-            {children}
         </div>
     );
 }

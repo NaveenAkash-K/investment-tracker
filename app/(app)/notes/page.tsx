@@ -12,6 +12,8 @@ import {
     updateNote,
 } from "./actions";
 import {PageHeader} from "@/components/page-header";
+import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
+import { FormSubmitButton } from "@/components/form-submit-button";
 
 type InvestmentNote = {
     id: string;
@@ -202,12 +204,7 @@ Review again after 3 months.`}
                             Mark as current plan
                         </label>
 
-                        <button
-                            type="submit"
-                            className="rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800"
-                        >
-                            Save note
-                        </button>
+                        <FormSubmitButton pendingText="Saving…">Save note</FormSubmitButton>
                     </form>
                 </section>
 
@@ -268,12 +265,7 @@ Review again after 3 months.`}
 
                                         <form action={deleteNote}>
                                             <input type="hidden" name="note_id" value={note.id} />
-                                            <button
-                                                type="submit"
-                                                className="rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
-                                            >
-                                                Delete
-                                            </button>
+                                            <ConfirmSubmitButton confirmation={`Delete ${note.title}? If it is current, the newest remaining note becomes current.`} pendingText="Deleting…">Delete</ConfirmSubmitButton>
                                         </form>
                                     </div>
 

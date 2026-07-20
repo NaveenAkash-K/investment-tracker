@@ -8,7 +8,7 @@ export function ErrorNotification({
     onRetry?: () => void;
 }) {
     return (
-        <div className="fixed left-1/2 top-4 z-50 w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 rounded-xl border border-red-200 bg-red-50 p-4 text-red-800 shadow-lg">
+        <div role="alert" aria-live="assertive" className="fixed left-1/2 top-4 z-50 w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 rounded-xl border border-red-200 bg-red-50 p-4 text-red-800 shadow-lg">
             <div className="flex items-start justify-between gap-4">
                 <div>
                     <p className="font-semibold">Something went wrong</p>

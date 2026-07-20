@@ -1,109 +1,57 @@
-<a href="https://demo-nextjs-with-supabase.vercel.app/">
-  <img alt="Next.js and Supabase Starter Kit - the fastest way to build apps with Next.js and Supabase" src="https://demo-nextjs-with-supabase.vercel.app/opengraph-image.png">
-  <h1 align="center">Next.js and Supabase Starter Kit</h1>
-</a>
+# Investment Tracker
 
-<p align="center">
- The fastest way to build apps with Next.js and Supabase
-</p>
+A private, manual portfolio tracker built for a personal INR-based portfolio. It tracks holdings, planned SIPs, target allocation, notes, archives, monthly snapshots, and contribution-adjusted monthly performance.
 
-<p align="center">
-  <a href="#features"><strong>Features</strong></a> ·
-  <a href="#demo"><strong>Demo</strong></a> ·
-  <a href="#deploy-to-vercel"><strong>Deploy to Vercel</strong></a> ·
-  <a href="#clone-and-run-locally"><strong>Clone and run locally</strong></a> ·
-  <a href="#feedback-and-issues"><strong>Feedback and issues</strong></a>
-  <a href="#more-supabase-examples"><strong>More Examples</strong></a>
-</p>
-<br/>
+USD categories separate:
 
-## Features
+- actual INR contribution;
+- market gain or loss in the foreign asset;
+- USD/INR appreciation or depreciation;
+- combined gain or loss in INR.
 
-- Works across the entire [Next.js](https://nextjs.org) stack
-  - App Router
-  - Pages Router
-  - Proxy
-  - Client
-  - Server
-  - It just works!
-- supabase-ssr. A package to configure Supabase Auth to use cookies
-- Password-based authentication block installed via the [Supabase UI Library](https://supabase.com/ui/docs/nextjs/password-based-auth)
-- Styling with [Tailwind CSS](https://tailwindcss.com)
-- Components with [shadcn/ui](https://ui.shadcn.com/)
-- Optional deployment with [Supabase Vercel Integration and Vercel deploy](#deploy-your-own)
-  - Environment variables automatically assigned to Vercel project
+The first enhanced monthly review is a baseline. Accurate market and currency attribution starts with the following month; historical snapshots are retained as value-only history.
 
-## Demo
+## Local setup
 
-You can view a fully working demo at [demo-nextjs-with-supabase.vercel.app](https://demo-nextjs-with-supabase.vercel.app/).
+1. Install packages with `npm install`.
+2. Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` to `.env.local`.
+3. Apply [the portfolio migration](supabase/migrations/202607200001_portfolio_safety_and_performance.sql), followed by [the Market Intelligence migration](supabase/migrations/202607200002_market_intelligence.sql), in the Supabase SQL editor.
+4. Run `npm run dev` and open `http://localhost:3000`.
 
-## Deploy to Vercel
+The migration is transactional. It adds monthly performance storage, archive-safe category behavior, single-current-note enforcement, and database functions used for atomic imports, bulk edits, snapshots, targets, categories, and full restores.
 
-Vercel deployment will guide you through creating a Supabase account and project.
+## Market Intelligence integration
 
-After installation of the Supabase integration, all relevant environment variables will be assigned to the project so the deployment is fully functioning.
+The companion analyser in `D:\Projects\Personal\market-analyser` can read the tracker's current holdings, targets and SIP plans, then publish daily alerts, weekly reports and monthly bounded SIP suggestions back to this app.
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fvercel%2Fnext.js%2Ftree%2Fcanary%2Fexamples%2Fwith-supabase&project-name=nextjs-with-supabase&repository-name=nextjs-with-supabase&demo-title=nextjs-with-supabase&demo-description=This+starter+configures+Supabase+Auth+to+use+cookies%2C+making+the+user%27s+session+available+throughout+the+entire+Next.js+app+-+Client+Components%2C+Server+Components%2C+Route+Handlers%2C+Server+Actions+and+Middleware.&demo-url=https%3A%2F%2Fdemo-nextjs-with-supabase.vercel.app%2F&external-id=https%3A%2F%2Fgithub.com%2Fvercel%2Fnext.js%2Ftree%2Fcanary%2Fexamples%2Fwith-supabase&demo-image=https%3A%2F%2Fdemo-nextjs-with-supabase.vercel.app%2Fopengraph-image.png)
+1. Apply the Market Intelligence migration listed above.
+2. Open **Market Intelligence → Configure signal mappings** and map every active SIP plan to one or more supported market keys. Category mappings improve portfolio-fit scoring.
+3. On the analyser machine, set `INVESTMENT_TRACKER_SUPABASE_URL`, `INVESTMENT_TRACKER_SUPABASE_SERVICE_ROLE_KEY` and `INVESTMENT_TRACKER_USER_ID` as server-side environment variables.
+4. Set `supabase.enabled` to `true` in the analyser config and run a preview before scheduling it.
 
-The above will also clone the Starter kit to your GitHub, you can clone that locally and develop locally.
+The service-role key must never be placed in `.env.local`, browser code or any public client bundle. Market recommendations remain advisory: Monthly Review records the actual amount invested and remains the source of truth.
 
-If you wish to just develop locally and not deploy to Vercel, [follow the steps below](#clone-and-run-locally).
+## Monthly workflow
 
-## Clone and run locally
+1. Update each holding's current native value.
+2. Open Monthly Review.
+3. Confirm the actual contribution for each category. For USD categories, confirm the conversion rate, USD received, and closing USD/INR rate.
+4. Save the review, then create the month's snapshot.
 
-1. You'll first need a Supabase project which can be made [via the Supabase dashboard](https://database.new)
+Planned SIP values are only prefills; they are not counted as invested until confirmed in Monthly Review.
 
-2. Create a Next.js app using the Supabase Starter template npx command
+## Data safety
 
-   ```bash
-   npx create-next-app --example with-supabase with-supabase-app
-   ```
+- CSV is available for convenient editing and individual exports.
+- Full JSON is the complete restore format, including archived records, notes, snapshots, category configuration, monthly performance, signal mappings, signal history, recommendations, and alerts.
+- Full restore and replace imports run as database transactions.
+- Permanent deletion is limited to the Archive page and requires confirmation.
 
-   ```bash
-   yarn create next-app --example with-supabase with-supabase-app
-   ```
+## Checks
 
-   ```bash
-   pnpm create next-app --example with-supabase with-supabase-app
-   ```
-
-3. Use `cd` to change into the app's directory
-
-   ```bash
-   cd with-supabase-app
-   ```
-
-4. Rename `.env.example` to `.env.local` and update the following:
-
-  ```env
-  NEXT_PUBLIC_SUPABASE_URL=[INSERT SUPABASE PROJECT URL]
-  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=[INSERT SUPABASE PROJECT API PUBLISHABLE OR ANON KEY]
-  ```
-  > [!NOTE]
-  > This example uses `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, which refers to Supabase's new **publishable** key format.
-  > Both legacy **anon** keys and new **publishable** keys can be used with this variable name during the transition period. Supabase's dashboard may show `NEXT_PUBLIC_SUPABASE_ANON_KEY`; its value can be used in this example.
-  > See the [full announcement](https://github.com/orgs/supabase/discussions/29260) for more information.
-
-  Both `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` can be found in [your Supabase project's API settings](https://supabase.com/dashboard/project/_?showConnect=true)
-
-5. You can now run the Next.js local development server:
-
-   ```bash
-   npm run dev
-   ```
-
-   The starter kit should now be running on [localhost:3000](http://localhost:3000/).
-
-6. This template comes with the default shadcn/ui style initialized. If you instead want other ui.shadcn styles, delete `components.json` and [re-install shadcn/ui](https://ui.shadcn.com/docs/installation/next)
-
-> Check out [the docs for Local Development](https://supabase.com/docs/guides/getting-started/local-development) to also run Supabase locally.
-
-## Feedback and issues
-
-Please file feedback and issues over on the [Supabase GitHub org](https://github.com/supabase/supabase/issues/new/choose).
-
-## More Supabase examples
-
-- [Next.js Subscription Payments Starter](https://github.com/vercel/nextjs-subscription-payments)
-- [Cookie-based Auth and the Next.js 13 App Router (free course)](https://youtube.com/playlist?list=PL5S4mPUpp4OtMhpnp93EFSo42iQ40XjbF)
-- [Supabase Auth and the Next.js App Router](https://github.com/supabase/supabase/tree/master/examples/auth/nextjs)
+```bash
+npm test
+npm run typecheck
+npm run lint
+npm run build
+```

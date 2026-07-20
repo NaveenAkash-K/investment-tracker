@@ -108,8 +108,8 @@ export async function updateTargets(formData: FormData) {
         );
     }
 
-    const { error } = await supabase.from("portfolio_targets").upsert(targetRows, {
-        onConflict: "user_id,category_id",
+    const { error } = await supabase.rpc("replace_targets", {
+        p_rows: targetRows,
     });
 
     if (error) {
@@ -127,25 +127,23 @@ export async function resetTargetsToDefault() {
 
     const { data: categories, error: categoriesError } = await supabase
         .from("asset_categories")
-        .select("id, name")
+        .select("id")
         .eq("user_id", userId);
 
     if (categoriesError) {
         throw new Error(categoriesError.message);
     }
 
-    const defaultTargetsByName: Record<string, number> = {
-        "Indian Assets": 60,
-        "US Assets": 15,
-        Debt: 10,
-        "Gold & Silver": 10,
-        Crypto: 5,
-    };
+    if (!categories?.length) throw new Error("Add at least one category first.");
 
-    const targetRows = (categories ?? []).map((category) => ({
+    const equalShare = Math.floor((10000 / categories.length)) / 100;
+    const targetRows = categories.map((category, index) => ({
         user_id: userId,
         category_id: category.id,
-        target_percentage: defaultTargetsByName[category.name] ?? 0,
+        target_percentage:
+            index === categories.length - 1
+                ? Number((100 - equalShare * (categories.length - 1)).toFixed(2))
+                : equalShare,
     }));
 
     const totalTargetPercentage = targetRows.reduce(
@@ -153,13 +151,9 @@ export async function resetTargetsToDefault() {
         0
     );
 
-    if (totalTargetPercentage !== 100) {
-        throw new Error("Default target allocation does not total 100%.");
-    }
+    if (Math.abs(totalTargetPercentage - 100) > 0.01) throw new Error("Could not calculate an equal allocation.");
 
-    const { error } = await supabase.from("portfolio_targets").upsert(targetRows, {
-        onConflict: "user_id,category_id",
-    });
+    const { error } = await supabase.rpc("replace_targets", { p_rows: targetRows });
 
     if (error) {
         throw new Error(error.message);

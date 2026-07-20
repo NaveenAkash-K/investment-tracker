@@ -210,14 +210,14 @@ export async function updateSipPlan(formData: FormData) {
 }
 
 export async function bulkUpdateSipAmounts(formData: FormData) {
-    const { supabase, userId } = await getSessionContext();
+    const { supabase } = await getSessionContext();
 
     const sipPlanIds = formData
         .getAll("sip_plan_id")
         .map((value) => String(value))
         .filter(Boolean);
 
-    for (const sipPlanId of sipPlanIds) {
+    const rows = sipPlanIds.map((sipPlanId) => {
         const monthlyAmount = readNumber(
             formData,
             `monthly_amount_${sipPlanId}`,
@@ -234,19 +234,11 @@ export async function bulkUpdateSipAmounts(formData: FormData) {
             throw new Error("SIP day must be between 1 and 31.");
         }
 
-        const { error } = await supabase
-            .from("sip_plans")
-            .update({
-                monthly_amount: monthlyAmount,
-                sip_day: sipDay,
-            })
-            .eq("id", sipPlanId)
-            .eq("user_id", userId);
+        return { id: sipPlanId, monthly_amount: monthlyAmount, sip_day: sipDay };
+    });
 
-        if (error) {
-            throw new Error(error.message);
-        }
-    }
+    const { error } = await supabase.rpc("bulk_update_sip_plans", { p_rows: rows });
+    if (error) throw new Error(error.message);
 
     revalidatePath("/sip-plan");
     revalidatePath("/dashboard");

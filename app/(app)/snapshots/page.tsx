@@ -2,12 +2,19 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { createCurrentMonthSnapshot, deleteSnapshot } from "./actions";
 import {PageHeader} from "@/components/page-header";
+import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
+import { FormSubmitButton } from "@/components/form-submit-button";
+import { getIndiaMonthStart } from "@/lib/performance";
 
 type PortfolioSnapshot = {
     id: string;
     snapshot_month: string;
     total_value_inr: number | string | null;
     total_monthly_sip: number | string | null;
+    total_contribution_inr: number | string | null;
+    market_gain_inr: number | string | null;
+    currency_gain_inr: number | string | null;
+    combined_gain_inr: number | string | null;
     note_title: string | null;
     note_content: string | null;
     created_at: string | null;
@@ -126,7 +133,7 @@ export default async function SnapshotsPage() {
             supabase
                 .from("portfolio_snapshots")
                 .select(
-                    "id, snapshot_month, total_value_inr, total_monthly_sip, note_title, note_content, created_at"
+                    "id, snapshot_month, total_value_inr, total_monthly_sip, total_contribution_inr, market_gain_inr, currency_gain_inr, combined_gain_inr, note_title, note_content, created_at"
                 )
                 .eq("user_id", user.id)
                 .order("snapshot_month", { ascending: false }),
@@ -189,25 +196,12 @@ export default async function SnapshotsPage() {
     );
 
     const latestSnapshot = snapshotsWithDetails[0] ?? null;
-    const firstSnapshot = snapshotsWithDetails.at(-1) ?? null;
-
-    const portfolioGrowth =
-        latestSnapshot && firstSnapshot && latestSnapshot.id !== firstSnapshot.id
-            ? toNumber(latestSnapshot.total_value_inr) -
-            toNumber(firstSnapshot.total_value_inr)
-            : 0;
-
-    const currentMonthStart = new Date();
-    currentMonthStart.setDate(1);
-    currentMonthStart.setHours(0, 0, 0, 0);
-
-    const hasCurrentMonthSnapshot = snapshots.some((snapshot) => {
-        const snapshotMonth = new Date(snapshot.snapshot_month);
-        return (
-            snapshotMonth.getFullYear() === currentMonthStart.getFullYear() &&
-            snapshotMonth.getMonth() === currentMonthStart.getMonth()
-        );
-    });
+    const previousSnapshot = snapshotsWithDetails[1] ?? null;
+    const valueDelta = latestSnapshot && previousSnapshot
+        ? toNumber(latestSnapshot.total_value_inr) - toNumber(previousSnapshot.total_value_inr) : 0;
+    const hasCurrentMonthSnapshot = snapshots.some((snapshot) => snapshot.snapshot_month.slice(0, 7) === getIndiaMonthStart().slice(0, 7));
+    const maxSnapshotValue = Math.max(...snapshotsWithDetails.map((snapshot) => toNumber(snapshot.total_value_inr)), 1);
+    const previousDrift = new Map(previousSnapshot?.categories.map((category) => [category.category_name, toNumber(category.difference_percentage)]) ?? []);
 
     return (
         <main className="min-h-screen bg-slate-50">
@@ -242,15 +236,40 @@ export default async function SnapshotsPage() {
                         helper="Copied during snapshot"
                     />
                     <SummaryCard
-                        label="Growth from first"
-                        value={formatCurrency(portfolioGrowth)}
+                        label="Latest combined gain"
+                        value={latestSnapshot ? formatCurrency(toNumber(latestSnapshot.combined_gain_inr)) : "-"}
                         helper={
-                            latestSnapshot && firstSnapshot && latestSnapshot.id !== firstSnapshot.id
-                                ? `${formatMonth(firstSnapshot.snapshot_month)} to ${formatMonth(latestSnapshot.snapshot_month)}`
-                                : "Needs 2 snapshots"
+                            latestSnapshot ? "Excludes monthly contribution" : "No snapshot yet"
                         }
                     />
                 </section>
+
+                {latestSnapshot && <section className="mt-6 grid gap-6 lg:grid-cols-2">
+                    <div className="rounded-xl border border-slate-200 bg-white p-5">
+                        <h2 className="text-lg font-semibold text-slate-950">Portfolio value trend</h2>
+                        <p className="mt-1 text-sm text-slate-500">Value includes contributions; hover labels are shown below each bar.</p>
+                        <div className="mt-6 flex h-48 items-end gap-2 overflow-x-auto border-b border-slate-200 pb-2">
+                            {[...snapshotsWithDetails].reverse().map((snapshot) => <div key={snapshot.id} className="flex min-w-12 flex-1 flex-col items-center justify-end gap-2" title={`${formatMonth(snapshot.snapshot_month)}: ${formatCurrency(toNumber(snapshot.total_value_inr))}`}>
+                                <div className="w-full max-w-16 rounded-t bg-slate-900" style={{height: `${Math.max(5, toNumber(snapshot.total_value_inr) / maxSnapshotValue * 160)}px`}} />
+                                <span className="text-[10px] text-slate-500">{new Date(snapshot.snapshot_month).toLocaleDateString("en-IN", {month: "short", year: "2-digit"})}</span>
+                            </div>)}
+                        </div>
+                    </div>
+                    <div className="rounded-xl border border-slate-200 bg-white p-5">
+                        <h2 className="text-lg font-semibold text-slate-950">Latest comparison</h2>
+                        <p className="mt-1 text-sm text-slate-500">{previousSnapshot ? `${formatMonth(previousSnapshot.snapshot_month)} → ${formatMonth(latestSnapshot.snapshot_month)}` : "A second snapshot will enable comparison."}</p>
+                        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                            <ComparisonMetric label="Portfolio value change" value={valueDelta} available={Boolean(previousSnapshot)} />
+                            <ComparisonMetric label="Actual contribution" value={toNumber(latestSnapshot.total_contribution_inr)} available />
+                            <ComparisonMetric label="Market gain/loss" value={toNumber(latestSnapshot.market_gain_inr)} available />
+                            <ComparisonMetric label="Currency gain/loss" value={toNumber(latestSnapshot.currency_gain_inr)} available />
+                        </div>
+                        {previousSnapshot && <div className="mt-5 border-t border-slate-200 pt-4"><h3 className="text-sm font-semibold text-slate-950">Allocation drift change</h3><div className="mt-3 space-y-2">{latestSnapshot.categories.map((category) => {
+                            const change = toNumber(category.difference_percentage) - (previousDrift.get(category.category_name) ?? 0);
+                            return <div key={category.id} className="flex justify-between gap-3 text-sm"><span className="text-slate-600">{category.category_name}</span><span className={change > 0 ? "text-amber-700" : change < 0 ? "text-emerald-700" : "text-slate-500"}>{change > 0 ? "+" : ""}{change.toFixed(2)} pp</span></div>;
+                        })}</div></div>}
+                    </div>
+                </section>}
 
                 <section className="mt-6 rounded-xl border border-slate-200 bg-white p-5">
                     <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -269,12 +288,7 @@ export default async function SnapshotsPage() {
               </span>
                         ) : (
                             <form action={createCurrentMonthSnapshot}>
-                                <button
-                                    type="submit"
-                                    className="rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800"
-                                >
-                                    Create current month snapshot
-                                </button>
+                                <FormSubmitButton pendingLabel="Creating…" className="rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50">Create current month snapshot</FormSubmitButton>
                             </form>
                         )}
                     </div>
@@ -354,6 +368,7 @@ export default async function SnapshotsPage() {
                                             <div className="border-t border-slate-200">
                                                 <div className="overflow-x-auto">
                                                     <table className="w-full min-w-[780px] text-left text-sm">
+                                                        <caption className="sr-only">Saved category allocation for {formatMonth(snapshot.snapshot_month)}</caption>
                                                         <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                                                         <tr>
                                                             <th className="px-5 py-3">Category</th>
@@ -496,12 +511,7 @@ export default async function SnapshotsPage() {
                                                             name="snapshot_id"
                                                             value={snapshot.id}
                                                         />
-                                                        <button
-                                                            type="submit"
-                                                            className="text-sm font-medium text-red-600 hover:text-red-700"
-                                                        >
-                                                            Delete snapshot
-                                                        </button>
+                                                        <ConfirmSubmitButton confirmation={`Delete the ${formatMonth(snapshot.snapshot_month)} snapshot?`} pendingLabel="Deleting…" className="text-sm font-medium text-red-600 hover:text-red-700 disabled:opacity-50">Delete snapshot</ConfirmSubmitButton>
                                                     </form>
                                                 </div>
                                             </div>
@@ -546,4 +556,9 @@ function InfoBox({ title, text }: { title: string; text: string }) {
             <p className="mt-2 text-sm leading-6 text-slate-600">{text}</p>
         </div>
     );
+}
+
+function ComparisonMetric({ label, value, available }: { label: string; value: number; available: boolean }) {
+    const tone = value > 0 ? "text-emerald-700" : value < 0 ? "text-red-700" : "text-slate-950";
+    return <div className="rounded-lg bg-slate-50 p-4"><p className="text-xs text-slate-500">{label}</p><p className={`mt-1 font-semibold ${tone}`}>{available ? formatCurrency(value) : "Needs 2 snapshots"}</p></div>;
 }

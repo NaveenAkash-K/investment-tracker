@@ -79,11 +79,12 @@ function revalidateEverything() {
 }
 
 export async function addCategory(formData: FormData) {
-    const { supabase, userId } = await getSessionContext();
+    const { supabase } = await getSessionContext();
 
     const name = readText(formData, "name");
     const sortOrder = readNumber(formData, "sort_order", 99);
     const targetPercentage = readNumber(formData, "target_percentage", 0);
+    const trackingCurrency = readText(formData, "tracking_currency") || "INR";
 
     validateCategoryName(name);
 
@@ -91,31 +92,16 @@ export async function addCategory(formData: FormData) {
         throw new Error("Target percentage must be between 0 and 100.");
     }
 
-    const { data: category, error: categoryError } = await supabase
-        .from("asset_categories")
-        .insert({
-            user_id: userId,
-            name,
-            sort_order: sortOrder,
-        })
-        .select("id")
-        .single();
+    if (!["INR", "USD"].includes(trackingCurrency)) throw new Error("Tracking currency must be INR or USD.");
 
-    if (categoryError || !category) {
-        throw new Error(categoryError?.message ?? "Failed to create category.");
-    }
+    const { error } = await supabase.rpc("add_asset_category", {
+        p_name: name,
+        p_sort_order: sortOrder,
+        p_target_percentage: targetPercentage,
+        p_tracking_currency: trackingCurrency,
+    });
 
-    const { error: targetError } = await supabase
-        .from("portfolio_targets")
-        .insert({
-            user_id: userId,
-            category_id: category.id,
-            target_percentage: targetPercentage,
-        });
-
-    if (targetError) {
-        throw new Error(targetError.message);
-    }
+    if (error) throw new Error(error.message);
 
     revalidateEverything();
     redirect("/settings");
@@ -127,22 +113,22 @@ export async function updateCategory(formData: FormData) {
     const categoryId = readText(formData, "category_id");
     const name = readText(formData, "name");
     const sortOrder = readNumber(formData, "sort_order", 99);
+    const trackingCurrency = readText(formData, "tracking_currency") || "INR";
 
     if (!categoryId) {
         throw new Error("Category ID is required.");
     }
 
     validateCategoryName(name);
+    if (!["INR", "USD"].includes(trackingCurrency)) throw new Error("Tracking currency must be INR or USD.");
     await assertCategoryBelongsToUser(supabase, userId, categoryId);
 
-    const { error } = await supabase
-        .from("asset_categories")
-        .update({
-            name,
-            sort_order: sortOrder,
-        })
-        .eq("id", categoryId)
-        .eq("user_id", userId);
+    const { error } = await supabase.rpc("update_asset_category", {
+        p_category_id: categoryId,
+        p_name: name,
+        p_sort_order: sortOrder,
+        p_tracking_currency: trackingCurrency,
+    });
 
     if (error) {
         throw new Error(error.message);
@@ -153,7 +139,7 @@ export async function updateCategory(formData: FormData) {
 }
 
 export async function deleteCategory(formData: FormData) {
-    const { supabase, userId } = await getSessionContext();
+    const { supabase } = await getSessionContext();
 
     const categoryId = readText(formData, "category_id");
 
@@ -161,83 +147,7 @@ export async function deleteCategory(formData: FormData) {
         throw new Error("Category ID is required.");
     }
 
-    await assertCategoryBelongsToUser(supabase, userId, categoryId);
-
-    const [holdingsResult, sipPlansResult] = await Promise.all([
-        supabase
-            .from("holdings")
-            .select("id")
-            .eq("user_id", userId)
-            .eq("category_id", categoryId)
-            .eq("is_active", true)
-            .limit(1),
-
-        supabase
-            .from("sip_plans")
-            .select("id")
-            .eq("user_id", userId)
-            .eq("category_id", categoryId)
-            .eq("is_active", true)
-            .limit(1),
-    ]);
-
-    if (holdingsResult.error) {
-        throw new Error(holdingsResult.error.message);
-    }
-
-    if (sipPlansResult.error) {
-        throw new Error(sipPlansResult.error.message);
-    }
-
-    if ((holdingsResult.data ?? []).length > 0) {
-        throw new Error(
-            "Cannot delete this category because holdings are linked to it. Move or archive those holdings first."
-        );
-    }
-
-    if ((sipPlansResult.data ?? []).length > 0) {
-        throw new Error(
-            "Cannot delete this category because SIP plans are linked to it. Move or archive those SIPs first."
-        );
-    }
-
-    const { error: archivedHoldingsDeleteError } = await supabase
-        .from("holdings")
-        .delete()
-        .eq("user_id", userId)
-        .eq("category_id", categoryId)
-        .eq("is_active", false);
-
-    if (archivedHoldingsDeleteError) {
-        throw new Error(archivedHoldingsDeleteError.message);
-    }
-
-    const { error: archivedSipDeleteError } = await supabase
-        .from("sip_plans")
-        .delete()
-        .eq("user_id", userId)
-        .eq("category_id", categoryId)
-        .eq("is_active", false);
-
-    if (archivedSipDeleteError) {
-        throw new Error(archivedSipDeleteError.message);
-    }
-
-    const { error: targetDeleteError } = await supabase
-        .from("portfolio_targets")
-        .delete()
-        .eq("category_id", categoryId)
-        .eq("user_id", userId);
-
-    if (targetDeleteError) {
-        throw new Error(targetDeleteError.message);
-    }
-
-    const { error } = await supabase
-        .from("asset_categories")
-        .delete()
-        .eq("id", categoryId)
-        .eq("user_id", userId);
+    const { error } = await supabase.rpc("delete_asset_category", { p_category_id: categoryId });
 
     if (error) {
         throw new Error(error.message);

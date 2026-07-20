@@ -12,6 +12,7 @@ import {
     updateSipPlan,
 } from "./actions";
 import {PageHeader} from "@/components/page-header";
+import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 
 type Category = {
     id: string;
@@ -50,7 +51,8 @@ type SipSummaryRow = {
     sipVsTargetDifference: number;
     currentPortfolioAmount: number;
     currentPortfolioPercentage: number;
-    status: "Below target" | "Near target" | "Above target";
+    projectedPortfolioPercentage: number;
+    status: "Corrective" | "Neutral" | "Adds drift";
 };
 
 function toNumber(value: unknown): number {
@@ -82,21 +84,19 @@ function inputNumberValue(value: unknown, decimals = 2): string {
     return toNumber(value).toFixed(decimals);
 }
 
-function getStatus(
-    sipVsTargetDifference: number
-): SipSummaryRow["status"] {
-    if (sipVsTargetDifference > 3) return "Above target";
-    if (sipVsTargetDifference < -3) return "Below target";
-    return "Near target";
+function getStatus(currentDifference: number, projectedDifference: number): SipSummaryRow["status"] {
+    if (Math.abs(projectedDifference) < Math.abs(currentDifference) - 0.1) return "Corrective";
+    if (Math.abs(projectedDifference) > Math.abs(currentDifference) + 0.1) return "Adds drift";
+    return "Neutral";
 }
 
 function getStatusClasses(status: SipSummaryRow["status"]): string {
-    if (status === "Above target") {
+    if (status === "Adds drift") {
         return "bg-amber-50 text-amber-700 ring-1 ring-amber-200";
     }
 
-    if (status === "Below target") {
-        return "bg-red-50 text-red-700 ring-1 ring-red-200";
+    if (status === "Neutral") {
+        return "bg-slate-100 text-slate-700 ring-1 ring-slate-200";
     }
 
     return "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200";
@@ -106,36 +106,15 @@ function buildSipWarnings(rows: SipSummaryRow[]): string[] {
     const warnings: string[] = [];
 
     for (const row of rows) {
-        if (row.targetPercentage > 0 && row.monthlySip === 0) {
+        if (row.currentPortfolioPercentage < row.targetPercentage - 2 && row.monthlySip === 0) {
             warnings.push(
-                `${row.categoryName} target is ${formatPercent(
-                    row.targetPercentage
-                )}, but SIP is currently zero.`
+                `${row.categoryName} is underweight, but its planned SIP is zero.`
             );
         }
 
-        if (row.sipVsTargetDifference > 5) {
+        if (row.status === "Adds drift") {
             warnings.push(
-                `${row.categoryName} SIP allocation is ${formatPercent(
-                    row.sipPercentage
-                )}, which is much above target ${formatPercent(row.targetPercentage)}.`
-            );
-        }
-
-        if (row.sipVsTargetDifference < -5 && row.targetPercentage > 0) {
-            warnings.push(
-                `${row.categoryName} SIP allocation is ${formatPercent(
-                    row.sipPercentage
-                )}, which is below target ${formatPercent(row.targetPercentage)}.`
-            );
-        }
-
-        if (
-            row.currentPortfolioPercentage > row.targetPercentage + 3 &&
-            row.sipPercentage > row.targetPercentage
-        ) {
-            warnings.push(
-                `${row.categoryName} is already above portfolio target and SIP is also above target.`
+                `${row.categoryName}'s planned SIP moves the portfolio farther from its target based on the current values.`
             );
         }
     }
@@ -264,6 +243,11 @@ export default async function SipPlanPage() {
                 : 0;
 
         const sipVsTargetDifference = sipPercentage - targetPercentage;
+        const projectedPortfolioPercentage = totalPortfolioValue + totalMonthlySip > 0
+            ? ((currentPortfolioAmount + monthlySip) / (totalPortfolioValue + totalMonthlySip)) * 100
+            : 0;
+        const currentDifference = currentPortfolioPercentage - targetPercentage;
+        const projectedDifference = projectedPortfolioPercentage - targetPercentage;
 
         return {
             categoryId: category.id,
@@ -274,7 +258,8 @@ export default async function SipPlanPage() {
             sipVsTargetDifference,
             currentPortfolioAmount,
             currentPortfolioPercentage,
-            status: getStatus(sipVsTargetDifference),
+            projectedPortfolioPercentage,
+            status: getStatus(currentDifference, projectedDifference),
         };
     });
 
@@ -293,7 +278,7 @@ export default async function SipPlanPage() {
             <div className="mx-auto max-w-7xl px-4 py-8">
                 <PageHeader
                     title="SIP Plan"
-                    description="Track active monthly investments and compare SIP allocation with your target portfolio."
+                    description="Track planned monthly investments and see whether they correct current portfolio drift."
                 />
 
                 <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -418,21 +403,22 @@ export default async function SipPlanPage() {
                             SIP allocation summary
                         </h2>
                         <p className="mt-1 text-sm text-slate-500">
-                            Compares your monthly SIP split with your target allocation and
-                            current portfolio allocation.
+                            Shows the planned split and whether one month of it moves the current
+                            portfolio closer to its targets.
                         </p>
                     </div>
 
                     <div className="overflow-x-auto">
                         <table className="w-full min-w-[900px] text-left text-sm">
+                            <caption className="sr-only">Planned SIP allocation and its effect on current portfolio drift</caption>
                             <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                             <tr>
                                 <th className="px-5 py-3">Category</th>
                                 <th className="px-5 py-3 text-right">Monthly SIP</th>
                                 <th className="px-5 py-3 text-right">SIP %</th>
                                 <th className="px-5 py-3 text-right">Target %</th>
-                                <th className="px-5 py-3 text-right">SIP vs target</th>
                                 <th className="px-5 py-3 text-right">Current portfolio %</th>
+                                <th className="px-5 py-3 text-right">After planned SIP</th>
                                 <th className="px-5 py-3">Status</th>
                             </tr>
                             </thead>
@@ -452,10 +438,10 @@ export default async function SipPlanPage() {
                                         {formatPercent(row.targetPercentage)}
                                     </td>
                                     <td className="px-5 py-4 text-right">
-                                        {formatPercent(row.sipVsTargetDifference)}
+                                        {formatPercent(row.currentPortfolioPercentage)}
                                     </td>
                                     <td className="px-5 py-4 text-right">
-                                        {formatPercent(row.currentPortfolioPercentage)}
+                                        {formatPercent(row.projectedPortfolioPercentage)}
                                     </td>
                                     <td className="px-5 py-4">
                       <span
@@ -498,6 +484,7 @@ export default async function SipPlanPage() {
                         <form action={bulkUpdateSipAmounts}>
                             <div className="overflow-x-auto">
                                 <table className="w-full min-w-[750px] text-left text-sm">
+                                    <caption className="sr-only">Quick monthly SIP amount and date update</caption>
                                     <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                                     <tr>
                                         <th className="px-5 py-3">SIP</th>
@@ -726,12 +713,7 @@ export default async function SipPlanPage() {
                                             name="sip_plan_id"
                                             value={sipPlan.id}
                                         />
-                                        <button
-                                            type="submit"
-                                            className="text-sm font-medium text-red-600 hover:text-red-700"
-                                        >
-                                            Archive SIP
-                                        </button>
+                                        <ConfirmSubmitButton confirmation={`Archive ${sipPlan.name}? You can restore it from Archive.`} pendingLabel="Archiving…" className="text-sm font-medium text-red-600 hover:text-red-700 disabled:opacity-50">Archive SIP</ConfirmSubmitButton>
                                     </form>
                                 </article>
                             ))}

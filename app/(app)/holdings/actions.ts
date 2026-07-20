@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { getIndiaDate } from "@/lib/performance";
 
 function readText(formData: FormData, key: string): string {
     const value = formData.get(key);
@@ -30,7 +31,7 @@ function readNumber(
 }
 
 function today(): string {
-    return new Date().toISOString().slice(0, 10);
+    return getIndiaDate();
 }
 
 function normalizeCurrency(value: string): string {
@@ -131,7 +132,8 @@ export async function addHolding(formData: FormData) {
     const assetType = readText(formData, "asset_type") || "Other";
     const currency = normalizeCurrency(readText(formData, "currency"));
     const currentValue = readNumber(formData, "current_value", 0);
-    const exchangeRateToInr = readNumber(formData, "exchange_rate_to_inr", 1);
+    const submittedExchangeRate = readNumber(formData, "exchange_rate_to_inr", 1);
+    const exchangeRateToInr = currency === "INR" ? 1 : submittedExchangeRate;
     const notes = readText(formData, "notes");
 
     validateHoldingInput({
@@ -174,7 +176,8 @@ export async function updateHolding(formData: FormData) {
     const assetType = readText(formData, "asset_type") || "Other";
     const currency = normalizeCurrency(readText(formData, "currency"));
     const currentValue = readNumber(formData, "current_value", 0);
-    const exchangeRateToInr = readNumber(formData, "exchange_rate_to_inr", 1);
+    const submittedExchangeRate = readNumber(formData, "exchange_rate_to_inr", 1);
+    const exchangeRateToInr = currency === "INR" ? 1 : submittedExchangeRate;
     const notes = readText(formData, "notes");
 
     if (!holdingId) {
@@ -216,14 +219,14 @@ export async function updateHolding(formData: FormData) {
 }
 
 export async function bulkUpdateHoldingValues(formData: FormData) {
-    const { supabase, userId } = await getSessionContext();
+    const { supabase } = await getSessionContext();
 
     const holdingIds = formData
         .getAll("holding_id")
         .map((value) => String(value))
         .filter(Boolean);
 
-    for (const holdingId of holdingIds) {
+    const rows = holdingIds.map((holdingId) => {
         const currentValue = readNumber(
             formData,
             `current_value_${holdingId}`,
@@ -244,20 +247,15 @@ export async function bulkUpdateHoldingValues(formData: FormData) {
             throw new Error("Exchange rate must be greater than zero.");
         }
 
-        const { error } = await supabase
-            .from("holdings")
-            .update({
-                current_value: currentValue,
-                exchange_rate_to_inr: exchangeRateToInr,
-                last_updated_at: today(),
-            })
-            .eq("id", holdingId)
-            .eq("user_id", userId);
+        return { id: holdingId, current_value: currentValue, exchange_rate_to_inr: exchangeRateToInr };
+    });
 
-        if (error) {
-            throw new Error(error.message);
-        }
-    }
+    const { error } = await supabase.rpc("bulk_update_holdings", {
+        p_rows: rows,
+        p_updated_on: today(),
+    });
+
+    if (error) throw new Error(error.message);
 
     revalidatePath("/holdings");
     revalidatePath("/dashboard");

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { parseCsv, requireHeaders, type CsvRow } from "@/lib/csv";
+import { getIndiaDate } from "@/lib/performance";
 
 function readCheckbox(formData: FormData, key: string): boolean {
     return formData.get(key) === "on";
@@ -52,7 +53,37 @@ function normalizeCurrency(value: string): string {
 }
 
 function today(): string {
-    return new Date().toISOString().slice(0, 10);
+    return getIndiaDate();
+}
+
+export async function restoreFullBackup(formData: FormData) {
+    const { supabase } = await getSessionContext();
+    const fileValue = formData.get("file");
+    if (!(fileValue instanceof File) || fileValue.size === 0) throw new Error("Choose a JSON backup file.");
+    if (fileValue.size > 15 * 1024 * 1024) throw new Error("Backup file is larger than 15 MB.");
+
+    let backup: unknown;
+    try { backup = JSON.parse(await fileValue.text()); }
+    catch { throw new Error("The selected file is not valid JSON."); }
+
+    if (!backup || typeof backup !== "object") throw new Error("Invalid backup structure.");
+    const record = backup as { format?: unknown; version?: unknown; data?: unknown };
+    if (record.format !== "investment-tracker-backup" || record.version !== 1 || !record.data) {
+        throw new Error("This is not a supported Investment Tracker backup.");
+    }
+
+    const { error } = await supabase.rpc("restore_complete_portfolio_backup", { p_backup: backup });
+    if (error) throw new Error(error.message);
+    revalidatePath("/", "layout");
+    redirect("/import-export?restored=1");
+}
+
+function readBoolean(row: CsvRow, key: string, fallbackValue: boolean) {
+    const value = String(row[key] ?? "").trim().toLowerCase();
+    if (!value) return fallbackValue;
+    if (value === "true") return true;
+    if (value === "false") return false;
+    throw new Error(`${key} must be true or false.`);
 }
 
 async function getFileText(formData: FormData): Promise<string> {
@@ -179,27 +210,15 @@ export async function importHoldings(formData: FormData) {
             current_value: currentValue,
             exchange_rate_to_inr: exchangeRateToInr,
             notes: String(row.notes ?? "").trim() || null,
-            is_active: true,
-            last_updated_at: today(),
+            is_active: readBoolean(row, "is_active", true),
+            last_updated_at: String(row.last_updated_at ?? "").trim() || today(),
         };
     });
 
-    if (replaceExisting) {
-        const { error } = await supabase
-            .from("holdings")
-            .update({
-                is_active: false,
-                last_updated_at: today(),
-            })
-            .eq("user_id", userId)
-            .eq("is_active", true);
-
-        if (error) {
-            throw new Error(error.message);
-        }
-    }
-
-    const { error } = await supabase.from("holdings").insert(holdingRows);
+    const { error } = await supabase.rpc("replace_holdings", {
+        p_rows: holdingRows,
+        p_replace: replaceExisting,
+    });
 
     if (error) {
         throw new Error(error.message);
@@ -253,23 +272,14 @@ export async function importSipPlans(formData: FormData) {
             monthly_amount: monthlyAmount,
             sip_day: sipDay,
             notes: String(row.notes ?? "").trim() || null,
-            is_active: true,
+            is_active: readBoolean(row, "is_active", true),
         };
     });
 
-    if (replaceExisting) {
-        const { error } = await supabase
-            .from("sip_plans")
-            .update({ is_active: false })
-            .eq("user_id", userId)
-            .eq("is_active", true);
-
-        if (error) {
-            throw new Error(error.message);
-        }
-    }
-
-    const { error } = await supabase.from("sip_plans").insert(sipRows);
+    const { error } = await supabase.rpc("replace_sip_plans", {
+        p_rows: sipRows,
+        p_replace: replaceExisting,
+    });
 
     if (error) {
         throw new Error(error.message);
@@ -314,6 +324,14 @@ export async function importTargets(formData: FormData) {
         };
     });
 
+    const uniqueCategoryIds = new Set(targetRows.map((row) => row.category_id));
+    if (uniqueCategoryIds.size !== targetRows.length) {
+        throw new Error("Targets CSV contains the same category more than once.");
+    }
+    if (uniqueCategoryIds.size !== categoryMap.size) {
+        throw new Error("Targets CSV must contain every configured asset category exactly once.");
+    }
+
     const totalTargetPercentage = targetRows.reduce(
         (sum, row) => sum + row.target_percentage,
         0
@@ -327,8 +345,8 @@ export async function importTargets(formData: FormData) {
         );
     }
 
-    const { error } = await supabase.from("portfolio_targets").upsert(targetRows, {
-        onConflict: "user_id,category_id",
+    const { error } = await supabase.rpc("replace_targets", {
+        p_rows: targetRows,
     });
 
     if (error) {

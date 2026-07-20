@@ -4,6 +4,8 @@ import { PageHeader } from "@/components/page-header";
 import { createClient } from "@/lib/supabase/server";
 import { signOutFromSettings, updateProfileSettings } from "./actions";
 import { addCategory, deleteCategory, updateCategory } from "./category-actions";
+import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
+import { FormSubmitButton } from "@/components/form-submit-button";
 
 type Profile = {
     id: string;
@@ -19,6 +21,7 @@ type Category = {
     id: string;
     name: string;
     sort_order: number | null;
+    tracking_currency: string | null;
 };
 
 type Target = {
@@ -63,7 +66,7 @@ export default async function SettingsPage() {
 
         supabase
             .from("asset_categories")
-            .select("id, name, sort_order")
+            .select("id, name, sort_order, tracking_currency")
             .eq("user_id", user.id)
             .order("sort_order", { ascending: true }),
 
@@ -75,13 +78,11 @@ export default async function SettingsPage() {
         supabase
             .from("holdings")
             .select("category_id")
-            .eq("is_active", true)
             .eq("user_id", user.id),
 
         supabase
             .from("sip_plans")
             .select("category_id")
-            .eq("is_active", true)
             .eq("user_id", user.id),
     ]);
 
@@ -135,17 +136,17 @@ export default async function SettingsPage() {
     const holdingsCountByCategoryId = new Map<string, number>();
     const sipCountByCategoryId = new Map<string, number>();
 
-    const totalTarget = categories.reduce(
-        (sum, category) => sum + (targetByCategoryId.get(category.id) ?? 0),
-        0
-    );
-
     for (const target of targets) {
         targetByCategoryId.set(
             target.category_id,
             toNumber(target.target_percentage)
         );
     }
+
+    const totalTarget = categories.reduce(
+        (sum, category) => sum + (targetByCategoryId.get(category.id) ?? 0),
+        0
+    );
 
     for (const holding of holdings) {
         holdingsCountByCategoryId.set(
@@ -169,7 +170,7 @@ export default async function SettingsPage() {
                     description="Manage profile defaults, export shortcuts, and account actions."
                 />
 
-                <section className="grid gap-4 md:grid-cols-3">
+                <section className="grid gap-4 md:grid-cols-2">
                     <SummaryCard
                         label="Signed in as"
                         value={user.email ?? "-"}
@@ -245,12 +246,7 @@ export default async function SettingsPage() {
                                 </p>
                             </div>
 
-                            <button
-                                type="submit"
-                                className="rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800"
-                            >
-                                Save settings
-                            </button>
+                            <FormSubmitButton pendingText="Saving…">Save settings</FormSubmitButton>
                         </form>
                     </div>
 
@@ -340,7 +336,15 @@ export default async function SettingsPage() {
                         </p>
                     </div>
 
-                    <form action={addCategory} className="mt-5 grid gap-4 md:grid-cols-4">
+                    <form action={addCategory} className="mt-5 grid gap-4 md:grid-cols-5">
+                        <div>
+                            <Label htmlFor="category_tracking_currency">Tracking currency</Label>
+                            <select id="category_tracking_currency" name="tracking_currency" defaultValue="INR" className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-950 outline-none focus:ring-2 focus:ring-slate-300">
+                                <option value="INR">INR</option>
+                                <option value="USD">USD</option>
+                            </select>
+                        </div>
+
                         <div>
                             <Label htmlFor="category_name">Category name</Label>
                             <Input
@@ -378,22 +382,19 @@ export default async function SettingsPage() {
                         </div>
 
                         <div className="flex items-end">
-                            <button
-                                type="submit"
-                                className="w-full rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800"
-                            >
-                                Add category
-                            </button>
+                            <FormSubmitButton pendingText="Adding…" className="w-full">Add category</FormSubmitButton>
                         </div>
                     </form>
 
                     <div className="mt-6 overflow-x-auto">
                         <table className="w-full min-w-[850px] text-left text-sm">
+                            <caption className="sr-only">Asset category names, currencies, targets, and linked record counts</caption>
                             <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                             <tr>
                                 <th className="px-4 py-3">Category</th>
                                 <th className="px-4 py-3 text-right">Sort order</th>
                                 <th className="px-4 py-3 text-right">Target %</th>
+                                <th className="px-4 py-3">Currency</th>
                                 <th className="px-4 py-3 text-right">Holdings</th>
                                 <th className="px-4 py-3 text-right">SIPs</th>
                                 <th className="px-4 py-3">Actions</th>
@@ -444,6 +445,13 @@ export default async function SettingsPage() {
                                             {(targetByCategoryId.get(category.id) ?? 0).toFixed(2)}%
                                         </td>
 
+                                        <td className="px-4 py-4">
+                                            <select form={`update-category-${category.id}`} name="tracking_currency" defaultValue={category.tracking_currency ?? "INR"} className="w-full max-w-28 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300">
+                                                <option value="INR">INR</option>
+                                                <option value="USD">USD</option>
+                                            </select>
+                                        </td>
+
                                         <td className="px-4 py-4 text-right">{holdingsCount}</td>
                                         <td className="px-4 py-4 text-right">{sipCount}</td>
 
@@ -463,19 +471,18 @@ export default async function SettingsPage() {
                                                         name="category_id"
                                                         value={category.id}
                                                     />
-                                                    <button
-                                                        type="submit"
+                                                    <ConfirmSubmitButton
+                                                        confirmation={`Delete ${category.name}? Categories with any active, archived, or historical references are blocked.`}
                                                         disabled={!canDelete}
-                                                        className="rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
-                                                    >
-                                                        Delete
-                                                    </button>
+                                                        pendingText="Deleting…"
+                                                        className="disabled:cursor-not-allowed disabled:opacity-40"
+                                                    >Delete</ConfirmSubmitButton>
                                                 </form>
                                             </div>
 
                                             {!canDelete && (
                                                 <p className="mt-2 text-xs text-slate-500">
-                                                    Move or archive active holdings/SIPs first.
+                                                    Remove referenced active or archived records first.
                                                 </p>
                                             )}
                                         </td>
@@ -486,7 +493,7 @@ export default async function SettingsPage() {
                             {categories.length === 0 && (
                                 <tr>
                                     <td
-                                        colSpan={6}
+                                        colSpan={7}
                                         className="px-4 py-10 text-center text-slate-500"
                                     >
                                         No categories found.

@@ -7,6 +7,10 @@ import {
     updateHolding,
 } from "./actions";
 import {PageHeader} from "@/components/page-header";
+import { HoldingCurrencyFields } from "@/components/holding-currency-fields";
+import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
+import { FormSubmitButton } from "@/components/form-submit-button";
+import { getIndiaMonthStart } from "@/lib/performance";
 
 type Category = {
     id: string;
@@ -131,12 +135,14 @@ export default async function HoldingsPage() {
         0
     );
 
-    const lastUpdatedDate =
+    const oldestUpdatedDate =
         holdings
             .map((holding) => holding.last_updated_at)
             .filter(Boolean)
             .sort()
-            .at(-1) ?? null;
+            .at(0) ?? null;
+    const currentMonth = getIndiaMonthStart().slice(0, 7);
+    const updatedThisMonth = holdings.filter((holding) => holding.last_updated_at?.startsWith(currentMonth)).length;
 
     return (
         <main className="min-h-screen bg-slate-50">
@@ -158,9 +164,9 @@ export default async function HoldingsPage() {
                         helper="Archived holdings are hidden"
                     />
                     <SummaryCard
-                        label="Last updated"
-                        value={formatDate(lastUpdatedDate)}
-                        helper="Based on holding updates"
+                        label="Fresh this month"
+                        value={`${updatedThisMonth}/${holdings.length}`}
+                        helper={oldestUpdatedDate ? `Oldest: ${formatDate(oldestUpdatedDate)}` : "No updates yet"}
                     />
                 </section>
 
@@ -209,13 +215,7 @@ export default async function HoldingsPage() {
                             </Select>
                         </div>
 
-                        <div className="lg:col-span-1">
-                            <Label htmlFor="currency">Currency</Label>
-                            <Select id="currency" name="currency" defaultValue="INR">
-                                <option value="INR">INR</option>
-                                <option value="USD">USD</option>
-                            </Select>
-                        </div>
+                        <HoldingCurrencyFields defaultUsdInrRate={defaultUsdInrRate} />
 
                         <div className="lg:col-span-2">
                             <Label htmlFor="current_value">Current value</Label>
@@ -230,19 +230,6 @@ export default async function HoldingsPage() {
                             />
                         </div>
 
-                        <div className="lg:col-span-2">
-                            <Label htmlFor="exchange_rate_to_inr">Rate to INR</Label>
-                            <Input
-                                id="exchange_rate_to_inr"
-                                name="exchange_rate_to_inr"
-                                type="number"
-                                min="0.000001"
-                                step="0.000001"
-                                defaultValue={inputNumberValue(defaultUsdInrRate, 6)}
-                                required
-                            />
-                        </div>
-
                         <div className="lg:col-span-10">
                             <Label htmlFor="notes">Notes</Label>
                             <Input
@@ -253,12 +240,7 @@ export default async function HoldingsPage() {
                         </div>
 
                         <div className="flex items-end lg:col-span-2">
-                            <button
-                                type="submit"
-                                className="w-full rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800"
-                            >
-                                Add holding
-                            </button>
+                            <FormSubmitButton pendingLabel="Adding…" className="w-full rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50">Add holding</FormSubmitButton>
                         </div>
                     </form>
                 </section>
@@ -278,6 +260,7 @@ export default async function HoldingsPage() {
                         <form action={bulkUpdateHoldingValues}>
                             <div className="overflow-x-auto">
                                 <table className="w-full min-w-[850px] text-left text-sm">
+                                    <caption className="sr-only">Quick monthly holding value and exchange-rate update</caption>
                                     <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                                     <tr>
                                         <th className="px-5 py-3">Holding</th>
@@ -547,12 +530,7 @@ export default async function HoldingsPage() {
 
                                     <form action={archiveHolding} className="mt-3">
                                         <input type="hidden" name="holding_id" value={holding.id} />
-                                        <button
-                                            type="submit"
-                                            className="text-sm font-medium text-red-600 hover:text-red-700"
-                                        >
-                                            Archive holding
-                                        </button>
+                                        <ConfirmSubmitButton confirmation={`Archive ${holding.name}? You can restore it from Archive.`} pendingLabel="Archiving…" className="text-sm font-medium text-red-600 hover:text-red-700 disabled:opacity-50">Archive holding</ConfirmSubmitButton>
                                     </form>
                                 </article>
                             ))}

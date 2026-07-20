@@ -31,40 +31,6 @@ async function getSessionContext() {
     };
 }
 
-type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
-
-async function assertNoteBelongsToUser(
-    supabase: SupabaseServerClient,
-    userId: string,
-    noteId: string
-) {
-    const { data, error } = await supabase
-        .from("investment_notes")
-        .select("id")
-        .eq("id", noteId)
-        .eq("user_id", userId)
-        .maybeSingle();
-
-    if (error || !data) {
-        throw new Error("Invalid note.");
-    }
-}
-
-async function unsetCurrentNotes(
-    supabase: SupabaseServerClient,
-    userId: string
-) {
-    const { error } = await supabase
-        .from("investment_notes")
-        .update({ is_current: false })
-        .eq("user_id", userId)
-        .eq("is_current", true);
-
-    if (error) {
-        throw new Error(error.message);
-    }
-}
-
 function validateNoteInput({
                                title,
                            }: {
@@ -80,7 +46,7 @@ function validateNoteInput({
 }
 
 export async function addNote(formData: FormData) {
-    const { supabase, userId } = await getSessionContext();
+    const { supabase } = await getSessionContext();
 
     const title = readText(formData, "title");
     const content = readText(formData, "content");
@@ -88,27 +54,11 @@ export async function addNote(formData: FormData) {
 
     validateNoteInput({ title });
 
-    const { data: existingNotes, error: existingNotesError } = await supabase
-        .from("investment_notes")
-        .select("id")
-        .eq("user_id", userId)
-        .limit(1);
-
-    if (existingNotesError) {
-        throw new Error(existingNotesError.message);
-    }
-
-    const shouldBeCurrent = makeCurrent || (existingNotes ?? []).length === 0;
-
-    if (shouldBeCurrent) {
-        await unsetCurrentNotes(supabase, userId);
-    }
-
-    const { error } = await supabase.from("investment_notes").insert({
-        user_id: userId,
-        title,
-        content,
-        is_current: shouldBeCurrent,
+    const { error } = await supabase.rpc("save_investment_note", {
+        p_note_id: null,
+        p_title: title,
+        p_content: content,
+        p_make_current: makeCurrent,
     });
 
     if (error) {
@@ -121,7 +71,7 @@ export async function addNote(formData: FormData) {
 }
 
 export async function updateNote(formData: FormData) {
-    const { supabase, userId } = await getSessionContext();
+    const { supabase } = await getSessionContext();
 
     const noteId = readText(formData, "note_id");
     const title = readText(formData, "title");
@@ -134,21 +84,12 @@ export async function updateNote(formData: FormData) {
 
     validateNoteInput({ title });
 
-    await assertNoteBelongsToUser(supabase, userId, noteId);
-
-    if (makeCurrent) {
-        await unsetCurrentNotes(supabase, userId);
-    }
-
-    const { error } = await supabase
-        .from("investment_notes")
-        .update({
-            title,
-            content,
-            is_current: makeCurrent,
-        })
-        .eq("id", noteId)
-        .eq("user_id", userId);
+    const { error } = await supabase.rpc("save_investment_note", {
+        p_note_id: noteId,
+        p_title: title,
+        p_content: content,
+        p_make_current: makeCurrent,
+    });
 
     if (error) {
         throw new Error(error.message);
@@ -160,7 +101,7 @@ export async function updateNote(formData: FormData) {
 }
 
 export async function markNoteAsCurrent(formData: FormData) {
-    const { supabase, userId } = await getSessionContext();
+    const { supabase } = await getSessionContext();
 
     const noteId = readText(formData, "note_id");
 
@@ -168,14 +109,9 @@ export async function markNoteAsCurrent(formData: FormData) {
         throw new Error("Note ID is required.");
     }
 
-    await assertNoteBelongsToUser(supabase, userId, noteId);
-    await unsetCurrentNotes(supabase, userId);
-
-    const { error } = await supabase
-        .from("investment_notes")
-        .update({ is_current: true })
-        .eq("id", noteId)
-        .eq("user_id", userId);
+    const { error } = await supabase.rpc("set_current_investment_note", {
+        p_note_id: noteId,
+    });
 
     if (error) {
         throw new Error(error.message);
@@ -187,7 +123,7 @@ export async function markNoteAsCurrent(formData: FormData) {
 }
 
 export async function deleteNote(formData: FormData) {
-    const { supabase, userId } = await getSessionContext();
+    const { supabase } = await getSessionContext();
 
     const noteId = readText(formData, "note_id");
 
@@ -195,13 +131,9 @@ export async function deleteNote(formData: FormData) {
         throw new Error("Note ID is required.");
     }
 
-    await assertNoteBelongsToUser(supabase, userId, noteId);
-
-    const { error } = await supabase
-        .from("investment_notes")
-        .delete()
-        .eq("id", noteId)
-        .eq("user_id", userId);
+    const { error } = await supabase.rpc("delete_investment_note", {
+        p_note_id: noteId,
+    });
 
     if (error) {
         throw new Error(error.message);

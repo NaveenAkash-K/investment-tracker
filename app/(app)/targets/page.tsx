@@ -5,6 +5,9 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { resetTargetsToDefault, updateTargets } from "./actions";
 import {PageHeader} from "@/components/page-header";
+import { contributionNeededWithoutSelling } from "@/lib/performance";
+import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
+import { FormSubmitButton } from "@/components/form-submit-button";
 
 type Category = {
     id: string;
@@ -35,6 +38,7 @@ type TargetRow = {
     targetPercentage: number;
     targetAmount: number;
     gapToTarget: number;
+    newMoneyNeeded: number;
     monthlySip: number;
     sipPercentage: number;
     differencePercentage: number;
@@ -96,7 +100,7 @@ function buildTargetWarnings(rows: TargetRow[], totalTargetPercentage: number) {
             warnings.push(
                 `${row.categoryName} is under target by ${formatPercent(
                     Math.abs(row.differencePercentage)
-                )}. Gap to target is ${formatCurrency(row.gapToTarget)}.`
+                )}. New contribution needed without selling is ${formatCurrency(row.newMoneyNeeded)}.`
             );
         }
 
@@ -235,6 +239,11 @@ export default async function TargetsPage() {
         const targetAmount = (totalPortfolioValue * targetPercentage) / 100;
         const gapToTarget = targetAmount - currentAmount;
         const differencePercentage = currentPercentage - targetPercentage;
+        const newMoneyNeeded = contributionNeededWithoutSelling(
+            currentAmount,
+            totalPortfolioValue,
+            targetPercentage
+        );
 
         return {
             categoryId: category.id,
@@ -244,6 +253,7 @@ export default async function TargetsPage() {
             targetPercentage,
             targetAmount,
             gapToTarget,
+            newMoneyNeeded,
             monthlySip,
             sipPercentage,
             differencePercentage,
@@ -313,24 +323,24 @@ export default async function TargetsPage() {
                                 Edit target allocation
                             </h2>
                             <p className="mt-1 text-sm text-slate-500">
-                                Example: Indian Assets 60%, US Assets 15%, Debt 10%, Gold &
-                                Silver 10%, Crypto 5%.
+                                Set the percentages that fit your own portfolio. Reset divides 100%
+                                equally across your current categories.
                             </p>
                         </div>
 
                         <form action={resetTargetsToDefault}>
-                            <button
-                                type="submit"
-                                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                            >
-                                Reset to default
-                            </button>
+                            <ConfirmSubmitButton
+                                confirmation="Replace all targets with an equal allocation?"
+                                pendingLabel="Resetting…"
+                                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                            >Reset equally</ConfirmSubmitButton>
                         </form>
                     </div>
 
                     <form action={updateTargets}>
                         <div className="overflow-x-auto">
                             <table className="w-full min-w-[1000px] text-left text-sm">
+                                <caption className="sr-only">Target allocation, rebalance differences, and new-money requirements</caption>
                                 <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                                 <tr>
                                     <th className="px-5 py-3">Category</th>
@@ -339,7 +349,8 @@ export default async function TargetsPage() {
                                     <th className="px-5 py-3 text-right">Difference</th>
                                     <th className="px-5 py-3 text-right">Current amount</th>
                                     <th className="px-5 py-3 text-right">Target amount</th>
-                                    <th className="px-5 py-3 text-right">Gap to target</th>
+                                    <th className="px-5 py-3 text-right">Rebalance difference</th>
+                                    <th className="px-5 py-3 text-right">New money needed</th>
                                     <th className="px-5 py-3 text-right">SIP %</th>
                                     <th className="px-5 py-3">Status</th>
                                 </tr>
@@ -394,6 +405,10 @@ export default async function TargetsPage() {
                                         </td>
 
                                         <td className="px-5 py-4 text-right">
+                                            {formatCurrency(row.newMoneyNeeded)}
+                                        </td>
+
+                                        <td className="px-5 py-4 text-right">
                                             {formatPercent(row.sipPercentage)}
                                         </td>
 
@@ -417,6 +432,7 @@ export default async function TargetsPage() {
                                     <td className="px-5 py-4 text-right">
                                         {totalPortfolioValue > 0 ? "100.00%" : "0.00%"}
                                     </td>
+                                    <td className="px-5 py-4 text-right">-</td>
                                     <td className="px-5 py-4 text-right">-</td>
                                     <td className="px-5 py-4 text-right">
                                         {formatCurrency(totalPortfolioValue)}
@@ -449,12 +465,10 @@ export default async function TargetsPage() {
                                 Saving will fail if the target total is not 100%.
                             </p>
 
-                            <button
-                                type="submit"
-                                className="rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800"
-                            >
-                                Save targets
-                            </button>
+                            <FormSubmitButton
+                                pendingLabel="Saving…"
+                                className="rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+                            >Save targets</FormSubmitButton>
                         </div>
                     </form>
                 </section>
@@ -470,8 +484,8 @@ export default async function TargetsPage() {
                             text="Your actual portfolio allocation based on active holdings."
                         />
                         <InfoBox
-                            title="Gap to target"
-                            text="Positive means underweight. Negative means overweight."
+                            title="Two different gaps"
+                            text="Rebalance difference assumes selling is allowed. New money needed shows the contribution required to hit target without selling anything."
                         />
                         <InfoBox
                             title="SIP %"

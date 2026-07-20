@@ -1,6 +1,8 @@
 import {redirect} from "next/navigation";
 import {createClient} from "@/lib/supabase/server";
 import {PageHeader} from "@/components/page-header";
+import Link from "next/link";
+import { getIndiaMonthStart } from "@/lib/performance";
 
 type Category = {
     id: string;
@@ -36,6 +38,14 @@ type InvestmentNote = {
     content: string;
     is_current: boolean;
     updated_at: string;
+};
+
+type MonthlyPerformance = {
+    performance_month: string;
+    contribution_inr: number | string | null;
+    market_gain_inr: number | string | null;
+    currency_gain_inr: number | string | null;
+    combined_gain_inr: number | string | null;
 };
 
 type AllocationRow = {
@@ -115,19 +125,8 @@ function buildWarnings(rows: AllocationRow[]): string[] {
             );
         }
 
-        const sipVsTargetDifference = Math.abs(
-            row.sipPercentage - row.targetPercentage
-        );
-
-        if (row.monthlySip > 0 && sipVsTargetDifference >= 8) {
-            warnings.push(
-                `${row.categoryName} SIP allocation is ${formatPercent(
-                    row.sipPercentage
-                )}, while target portfolio allocation is ${formatPercent(
-                    row.targetPercentage
-                )}.`
-            );
-        }
+        // A high SIP share may intentionally correct an underweight category.
+        // Warnings therefore use current portfolio drift, not SIP-vs-target alone.
     }
 
     return warnings;
@@ -151,6 +150,7 @@ export default async function DashboardPage() {
         targetsResult,
         sipPlansResult,
         notesResult,
+        monthlyPerformanceResult,
     ] = await Promise.all([
         supabase
             .from("asset_categories")
@@ -182,6 +182,13 @@ export default async function DashboardPage() {
             .order("is_current", {ascending: false})
             .order("updated_at", {ascending: false})
             .limit(1),
+
+        supabase
+            .from("monthly_category_performance")
+            .select("performance_month, contribution_inr, market_gain_inr, currency_gain_inr, combined_gain_inr")
+            .eq("user_id", user.id)
+            .order("performance_month", {ascending: false})
+            .limit(24),
     ]);
 
     const queryError =
@@ -189,7 +196,8 @@ export default async function DashboardPage() {
         holdingsResult.error ||
         targetsResult.error ||
         sipPlansResult.error ||
-        notesResult.error;
+        notesResult.error ||
+        monthlyPerformanceResult.error;
 
     if (queryError) {
         return (
@@ -207,6 +215,13 @@ export default async function DashboardPage() {
     const targets = (targetsResult.data ?? []) as Target[];
     const sipPlans = (sipPlansResult.data ?? []) as SipPlan[];
     const latestNote = ((notesResult.data ?? []) as InvestmentNote[])[0];
+    const performanceRows = (monthlyPerformanceResult.data ?? []) as MonthlyPerformance[];
+    const latestPerformanceMonth = performanceRows[0]?.performance_month;
+    const latestPerformance = performanceRows.filter((row) => row.performance_month === latestPerformanceMonth);
+    const monthlyContribution = latestPerformance.reduce((sum, row) => sum + toNumber(row.contribution_inr), 0);
+    const monthlyMarketGain = latestPerformance.reduce((sum, row) => sum + toNumber(row.market_gain_inr), 0);
+    const monthlyCurrencyGain = latestPerformance.reduce((sum, row) => sum + toNumber(row.currency_gain_inr), 0);
+    const monthlyCombinedGain = latestPerformance.reduce((sum, row) => sum + toNumber(row.combined_gain_inr), 0);
 
     const targetByCategoryId = new Map<string, number>();
     const amountByCategoryId = new Map<string, number>();
@@ -245,12 +260,14 @@ export default async function DashboardPage() {
         0
     );
 
-    const lastUpdatedDate =
+    const oldestUpdatedDate =
         holdings
             .map((holding) => holding.last_updated_at)
             .filter(Boolean)
             .sort()
-            .at(-1) ?? null;
+            .at(0) ?? null;
+    const currentMonth = getIndiaMonthStart().slice(0, 7);
+    const updatedThisMonth = holdings.filter((holding) => holding.last_updated_at?.startsWith(currentMonth)).length;
 
     const rows: AllocationRow[] = categories.map((category) => {
         const currentAmount = amountByCategoryId.get(category.id) ?? 0;
@@ -306,15 +323,28 @@ export default async function DashboardPage() {
                         helper={`${sipPlans.length} active SIPs`}
                     />
                     <SummaryCard
-                        label="Asset categories"
-                        value={String(categories.length)}
-                        helper="Target allocation enabled"
+                        label="Portfolio freshness"
+                        value={`${updatedThisMonth}/${holdings.length}`}
+                        helper={oldestUpdatedDate ? `Oldest value: ${formatDate(oldestUpdatedDate)}` : "No holding dates yet"}
                     />
                     <SummaryCard
-                        label="Latest note"
-                        value={latestNote ? "Available" : "No note yet"}
-                        helper={latestNote ? latestNote.title : "Create one later"}
+                        label="Latest real growth"
+                        value={latestPerformanceMonth ? formatCurrency(monthlyCombinedGain) : "Not tracked"}
+                        helper={latestPerformanceMonth ? formatMonthLabel(latestPerformanceMonth) : "Start a monthly review"}
                     />
+                </section>
+
+                <section className="mt-6 rounded-xl border border-slate-200 bg-white p-5">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div><h2 className="text-lg font-semibold text-slate-950">Monthly performance</h2><p className="mt-1 text-sm text-slate-500">Contributions are separated from market movement and USD/INR movement.</p></div>
+                        <Link href="/monthly-review" className="rounded-lg bg-slate-950 px-4 py-2 text-center text-sm font-medium text-white">Open monthly review</Link>
+                    </div>
+                    {latestPerformanceMonth ? <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                        <Metric label="Actual contribution" value={monthlyContribution} />
+                        <Metric label="Market gain/loss" value={monthlyMarketGain} signed />
+                        <Metric label="Currency gain/loss" value={monthlyCurrencyGain} signed />
+                        <Metric label="Combined gain/loss" value={monthlyCombinedGain} signed />
+                    </div> : <p className="mt-5 rounded-lg bg-blue-50 p-4 text-sm text-blue-800">Your first monthly review creates the baseline. Accurate market and currency gains begin from the next month.</p>}
                 </section>
 
                 {warnings.length > 0 && (
@@ -330,19 +360,29 @@ export default async function DashboardPage() {
                     </section>
                 )}
 
+                <section className="mt-6 rounded-xl border border-slate-200 bg-white p-5">
+                    <h2 className="text-lg font-semibold text-slate-950">Current allocation</h2>
+                    <p className="mt-1 text-sm text-slate-500">A quick visual of each category&apos;s share of the active portfolio.</p>
+                    <div className="mt-5 space-y-4">{rows.map((row) => <div key={row.categoryId}>
+                        <div className="mb-1 flex justify-between gap-3 text-sm"><span className="font-medium text-slate-700">{row.categoryName}</span><span className="text-slate-500">{formatPercent(row.currentPercentage)} / {formatPercent(row.targetPercentage)} target</span></div>
+                        <div className="relative h-3 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-blue-600" style={{width: `${Math.min(row.currentPercentage, 100)}%`}} /><span className="absolute inset-y-0 w-0.5 bg-slate-950" style={{left: `${Math.min(row.targetPercentage, 100)}%`}} /></div>
+                    </div>)}</div>
+                </section>
+
                 <section className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white">
                     <div className="border-b border-slate-200 px-5 py-4">
                         <h2 className="text-lg font-semibold text-slate-950">
                             Portfolio allocation
                         </h2>
                         <p className="mt-1 text-sm text-slate-500">
-                            Positive gap means you are underweight and need more allocation.
-                            Negative gap means you are already overweight.
+                            Rebalance difference assumes the total stays fixed, so it describes
+                            selling/reallocation—not new money required without selling.
                         </p>
                     </div>
 
                     <div className="overflow-x-auto">
                         <table className="w-full min-w-[900px] text-left text-sm">
+                            <caption className="sr-only">Current portfolio allocation compared with targets and planned SIPs</caption>
                             <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                             <tr>
                                 <th className="px-5 py-3">Asset</th>
@@ -350,7 +390,7 @@ export default async function DashboardPage() {
                                 <th className="px-5 py-3 text-right">Current %</th>
                                 <th className="px-5 py-3 text-right">Target %</th>
                                 <th className="px-5 py-3 text-right">Difference</th>
-                                <th className="px-5 py-3 text-right">Gap to target</th>
+                                <th className="px-5 py-3 text-right">Rebalance difference</th>
                                 <th className="px-5 py-3 text-right">Monthly SIP</th>
                                 <th className="px-5 py-3 text-right">SIP %</th>
                                 <th className="px-5 py-3">Status</th>
@@ -498,4 +538,14 @@ function SummaryCard({
             <p className="mt-1 text-sm text-slate-500">{helper}</p>
         </div>
     );
+}
+
+function formatMonthLabel(value: string) {
+    return new Intl.DateTimeFormat("en-IN", { month: "long", year: "numeric", timeZone: "UTC" })
+        .format(new Date(`${value.slice(0, 10)}T00:00:00Z`));
+}
+
+function Metric({ label, value, signed = false }: { label: string; value: number; signed?: boolean }) {
+    const tone = signed ? (value > 0 ? "text-emerald-700" : value < 0 ? "text-red-700" : "text-slate-950") : "text-slate-950";
+    return <div className="rounded-lg bg-slate-50 p-4"><p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p><p className={`mt-2 text-xl font-bold ${tone}`}>{formatCurrency(value)}</p></div>;
 }
