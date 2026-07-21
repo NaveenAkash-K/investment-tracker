@@ -66,12 +66,20 @@ export async function saveSwingSettings(formData: FormData) {
 export async function confirmSwingEntry(formData: FormData) {
     await execute(async () => {
         const supabase = await authenticatedClient();
+        const candidateId = required(formData, "candidate_id");
+        const { data: candidate, error: candidateError } = await supabase
+            .from("swing_candidates")
+            .select("setup_type")
+            .eq("id", candidateId)
+            .single();
+        if (candidateError) throw new Error(candidateError.message);
+        const testOnly = String(candidate.setup_type ?? "").startsWith("TEST_");
         const { error } = await supabase.rpc("confirm_swing_entry", {
-            p_candidate_id: required(formData, "candidate_id"),
+            p_candidate_id: candidateId,
             p_entry_date: required(formData, "entry_date"),
             p_entry_price: number(formData, "entry_price"),
             p_quantity: integer(formData, "quantity"),
-            p_trade_mode: required(formData, "trade_mode"),
+            p_trade_mode: testOnly ? "paper" : required(formData, "trade_mode"),
             p_notes: text(formData, "notes") || null,
         });
         if (error) throw new Error(error.message);

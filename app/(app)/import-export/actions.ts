@@ -72,7 +72,7 @@ export async function restoreFullBackup(formData: FormData) {
         throw new Error("This is not a supported Investment Tracker backup.");
     }
 
-    const { error } = await supabase.rpc("restore_complete_portfolio_backup_v2", { p_backup: backup });
+    const { error } = await supabase.rpc("restore_complete_portfolio_backup_v3", { p_backup: backup });
     if (error) throw new Error(error.message);
     revalidatePath("/", "layout");
     redirect("/import-export?restored=1");

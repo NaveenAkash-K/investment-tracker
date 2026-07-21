@@ -11,6 +11,10 @@ const TABLES = [
     "category_signal_mappings", "sip_signal_mappings",
     "swing_lab_settings", "swing_scan_runs", "swing_candidates",
     "swing_trades", "swing_trade_events",
+    "news_settings", "news_sources", "news_pipeline_runs", "news_articles",
+    "market_events", "market_event_articles", "market_event_impacts",
+    "market_event_reactions", "portfolio_event_impacts",
+    "news_event_evaluations", "market_event_alerts",
 ] as const;
 
 export async function GET() {
