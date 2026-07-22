@@ -32,7 +32,7 @@ export async function GET() {
     const data = Object.fromEntries(results.map((result) => [result.table, result.data]));
     const body = JSON.stringify({
         format: "investment-tracker-backup",
-        version: 1,
+        version: 2,
         exported_at: new Date().toISOString(),
         data,
     }, null, 2);

@@ -26,8 +26,15 @@ type Settings = {
 };
 type Scan = {
     id: string; as_of: string; status: string; model_version: string; market_regime: string;
+    raw_market_regime: string; regime_confirmed: boolean; regime_reason: string | null;
+    regime_confirmation_reason: string | null;
     benchmark_symbol: string | null; benchmark_close: number | string | null;
-    breadth_percentage: number | string | null; universe_size: number; eligible_size: number; data_issues: unknown;
+    benchmark_sma50: number | string | null; benchmark_sma200: number | string | null;
+    benchmark_distance_200_percentage: number | string | null; benchmark_price_date: string | null;
+    breadth_percentage: number | string | null; breadth_available: number; breadth_coverage_percentage: number | string | null;
+    universe_size: number; eligible_size: number; published_size: number;
+    effective_minimum_score: number | string | null; effective_risk_percentage: number | string | null;
+    scan_blocked_reason: string | null; gate_counts: unknown; data_issues: unknown;
 };
 type Candidate = {
     id: string; signal_key: string; symbol: string; company_name: string; sector: string | null;
@@ -55,8 +62,8 @@ type Trade = {
 const defaults: Settings = {
     trading_capital_inr: 100000,
     risk_per_trade_percentage: 0.5,
-    max_open_positions: 5,
-    max_sector_positions: 2,
+    max_open_positions: 2,
+    max_sector_positions: 1,
     minimum_setup_score: 70,
     paper_mode: true,
 };
@@ -104,6 +111,33 @@ function issueList(value: unknown) {
     });
 }
 
+function numberRecord(value: unknown) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {} as Record<string, number>;
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, num(item)]));
+}
+
+const gateLabels: Record<string, string> = {
+    blocked_by_red_regime: "Not evaluated: RED regime",
+    blocked_by_unknown_regime: "Not evaluated: unverified regime",
+    stale_or_missing_session: "Missing completed-session price",
+    insufficient_history: "Insufficient price history",
+    price_or_atr: "Price or volatility gate",
+    liquidity: "Liquidity gate",
+    trend_alignment: "Not above rising 50/200-day trend",
+    sma50_not_rising: "50-day average not rising",
+    relative_strength: "Did not outperform Nifty",
+    recent_breakout: "No recent breakout",
+    pullback_shape: "Pullback shape outside limits",
+    risk_geometry: "Stop distance outside limits",
+    score_below_minimum: "Setup score below minimum",
+    quantity_zero: "Quantity rounded to zero",
+    passed_all_gates: "Passed all stock gates",
+    excluded_or_event_blackout: "Excluded or event blackout",
+    already_active: "Already active",
+    sector_limit: "Sector position limit",
+    published_candidates: "Published candidates",
+};
+
 export default async function SwingLabPage({ searchParams }: { searchParams: SearchParams }) {
     const supabase = await createClient();
     const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -111,14 +145,14 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
 
     const [settingsResult, scanResult, candidatesResult, tradesResult] = await Promise.all([
         supabase.from("swing_lab_settings").select("trading_capital_inr, risk_per_trade_percentage, max_open_positions, max_sector_positions, minimum_setup_score, paper_mode").eq("user_id", user.id).maybeSingle(),
-        supabase.from("swing_scan_runs").select("id, as_of, status, model_version, market_regime, benchmark_symbol, benchmark_close, breadth_percentage, universe_size, eligible_size, data_issues").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
+        supabase.from("swing_scan_runs").select("id, as_of, status, model_version, market_regime, raw_market_regime, regime_confirmed, regime_reason, regime_confirmation_reason, benchmark_symbol, benchmark_close, benchmark_sma50, benchmark_sma200, benchmark_distance_200_percentage, benchmark_price_date, breadth_percentage, breadth_available, breadth_coverage_percentage, universe_size, eligible_size, published_size, effective_minimum_score, effective_risk_percentage, scan_blocked_reason, gate_counts, data_issues").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
         supabase.from("swing_candidates").select("id, signal_key, symbol, company_name, sector, setup_type, status, setup_score, setup_as_of, expires_on, market_regime, close_price, entry_trigger, maximum_entry, initial_stop, atr, risk_per_share, reward_risk_ratio, suggested_quantity, suggested_risk_inr, last_price, last_price_as_of, score_components, reasons, invalidation_reason").eq("user_id", user.id).order("setup_as_of", { ascending: false }).limit(100),
         supabase.from("swing_trades").select("id, candidate_id, symbol, company_name, sector, trade_mode, status, signal_entry, maximum_entry, entry_date, entry_price, quantity, initial_stop, current_stop, initial_risk_per_share, planned_risk_inr, current_price, current_price_as_of, highest_close, unrealized_pnl_inr, unrealized_r_multiple, exit_signal_reason, exit_signal_at, exit_date, exit_price, fees_inr, realized_pnl_inr, realized_r_multiple, notes").eq("user_id", user.id).order("entry_date", { ascending: false }).limit(200),
     ]);
     const params = await searchParams;
     const queryError = settingsResult.error || scanResult.error || candidatesResult.error || tradesResult.error;
     if (queryError) {
-        return <main className="mx-auto max-w-5xl px-4 py-8"><div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-800"><h1 className="font-semibold">Swing Lab migration required</h1><p className="mt-2 text-sm">{queryError.message}</p><p className="mt-2 text-xs">Apply <code>202607200003_swing_lab.sql</code> in Supabase, then reload this page.</p></div></main>;
+        return <main className="mx-auto max-w-5xl px-4 py-8"><div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-800"><h1 className="font-semibold">Swing Lab migration required</h1><p className="mt-2 text-sm">{queryError.message}</p><p className="mt-2 text-xs">Apply the pending Supabase migrations through <code>202607220001_swing_lab_v2.sql</code>, then reload this page.</p></div></main>;
     }
 
     const settings = (settingsResult.data ?? defaults) as Settings;
@@ -141,6 +175,9 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
         exitDate: trade.exit_date,
     })));
     const scanIssues = issueList(latestScan?.data_issues);
+    const gateEntries = Object.entries(numberRecord(latestScan?.gate_counts)).filter(([, count]) => count > 0);
+    const slotCapital = num(settings.trading_capital_inr) / Math.max(settings.max_open_positions, 1);
+    const riskBudget = num(settings.trading_capital_inr) * num(settings.risk_per_trade_percentage) / 100;
 
     return <main><div className="mx-auto max-w-7xl px-4 py-8">
         <PageHeader title="Swing Lab" description="End-of-day Indian equity candidates, manually confirmed entries, protective stops, exit signals, and a separate swing-trade journal." />
@@ -159,13 +196,24 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
                 <div><h2 className="text-lg font-semibold">Latest end-of-day scan</h2><p className="mt-1 text-sm text-slate-500">Candidates are research priorities. A trade starts only after you confirm the actual fill.</p></div>
                 {latestScan ? <RegimeBadge regime={latestScan.market_regime} /> : null}
             </div>
-            {latestScan ? <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            {latestScan ? <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
                 <SmallMetric label="As of" value={dateTime(latestScan.as_of)} />
-                <SmallMetric label="Benchmark" value={`${latestScan.benchmark_symbol ?? "Nifty"} ${num(latestScan.benchmark_close).toFixed(0)}`} />
-                <SmallMetric label="Breadth" value={latestScan.breadth_percentage === null ? "N/A" : `${num(latestScan.breadth_percentage).toFixed(0)}%`} />
+                <SmallMetric label="Price session" value={date(latestScan.benchmark_price_date)} />
+                <SmallMetric label="Nifty close" value={latestScan.benchmark_close === null ? "N/A" : num(latestScan.benchmark_close).toFixed(0)} />
+                <SmallMetric label="50-day average" value={latestScan.benchmark_sma50 === null ? "N/A" : num(latestScan.benchmark_sma50).toFixed(0)} />
+                <SmallMetric label="200-day average" value={latestScan.benchmark_sma200 === null ? "N/A" : num(latestScan.benchmark_sma200).toFixed(0)} />
+                <SmallMetric label="Distance vs 200-day" value={latestScan.benchmark_distance_200_percentage === null ? "N/A" : signed(latestScan.benchmark_distance_200_percentage, "%")} />
+                <SmallMetric label="Breadth above 50-day" value={latestScan.breadth_percentage === null ? "N/A" : `${num(latestScan.breadth_percentage).toFixed(0)}% (${latestScan.breadth_available}/${latestScan.universe_size})`} />
                 <SmallMetric label="Universe" value={String(latestScan.universe_size)} />
-                <SmallMetric label="Passed gates" value={String(latestScan.eligible_size)} />
             </div> : <p className="mt-4 rounded-lg bg-blue-50 p-4 text-sm text-blue-800">The migration is ready, but no analyzer swing scan has been published yet. Run the updated analyzer after applying the migration.</p>}
+            {latestScan ? <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                <p className="font-semibold">Why this regime?</p>
+                <p className="mt-1">{latestScan.regime_reason ?? "Regime evidence is unavailable."}</p>
+                <p className="mt-1 text-xs text-slate-500">Raw reading: {latestScan.raw_market_regime}. {latestScan.regime_confirmation_reason ?? (latestScan.regime_confirmed ? "Confirmed using completed sessions." : "Awaiting confirmation.")}</p>
+                <p className="mt-2 text-xs font-medium text-slate-600">Controls used: minimum score {latestScan.effective_minimum_score === null ? "N/A" : num(latestScan.effective_minimum_score).toFixed(0)} · risk {latestScan.effective_risk_percentage === null ? "N/A" : `${num(latestScan.effective_risk_percentage).toFixed(2)}%`} · {latestScan.eligible_size} passed · {latestScan.published_size} published</p>
+            </div> : null}
+            {latestScan?.scan_blocked_reason ? <div role="status" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><p className="font-semibold">Candidate scan status</p><p className="mt-1">{latestScan.scan_blocked_reason}</p></div> : null}
+            {gateEntries.length > 0 ? <details className="mt-4 rounded-lg border border-slate-200 p-4"><summary className="cursor-pointer text-sm font-semibold">Candidate gate funnel</summary><div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{gateEntries.map(([key, count]) => <div key={key} className="flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2 text-sm"><span className="text-slate-600">{gateLabels[key] ?? key.replaceAll("_", " ")}</span><strong>{count}</strong></div>)}</div><p className="mt-3 text-xs text-slate-500">Each stock is counted at its first failed gate. In RED or UNKNOWN, stock-level gates are deliberately not evaluated.</p></details> : null}
             {scanIssues.length > 0 ? <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800"><p className="font-semibold">Scan data limitations</p><ul className="mt-2 space-y-1">{scanIssues.map((issue) => <li key={issue}>• {issue}</li>)}</ul></div> : null}
         </section>
 
@@ -190,6 +238,8 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
         <section className="mt-8 rounded-xl border border-slate-200 bg-white p-5">
             <h2 className="text-lg font-semibold">Swing Lab risk settings</h2>
             <p className="mt-1 text-sm text-slate-500">These settings control suggested quantities and analyzer candidate gates. Start in paper mode.</p>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2"><SmallMetric label="Capital available per slot" value={money(slotCapital)} /><SmallMetric label="Maximum planned loss per trade" value={money(riskBudget)} /></div>
+            {num(settings.trading_capital_inr) <= 10000 && settings.max_open_positions > 2 ? <p role="alert" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">With {money(settings.trading_capital_inr)}, use at most two positions. More slots can cause otherwise valid stocks to receive a suggested quantity of zero.</p> : null}
             <form action={saveSwingSettings} className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <NumberField name="trading_capital_inr" label="Trading capital (INR)" value={num(settings.trading_capital_inr)} min={0} step={1000} />
                 <NumberField name="risk_per_trade_percentage" label="Risk per trade (%)" value={num(settings.risk_per_trade_percentage)} min={0.1} max={5} step={0.1} />
