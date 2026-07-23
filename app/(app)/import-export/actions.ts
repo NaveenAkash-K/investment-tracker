@@ -60,7 +60,7 @@ export async function restoreFullBackup(formData: FormData) {
     const { supabase } = await getSessionContext();
     const fileValue = formData.get("file");
     if (!(fileValue instanceof File) || fileValue.size === 0) throw new Error("Choose a JSON backup file.");
-    if (fileValue.size > 15 * 1024 * 1024) throw new Error("Backup file is larger than 15 MB.");
+    if (fileValue.size > 50 * 1024 * 1024) throw new Error("Backup file is larger than 50 MB.");
 
     let backup: unknown;
     try { backup = JSON.parse(await fileValue.text()); }

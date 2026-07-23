@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { PageHeader } from "@/components/page-header";
 import { StatusBanner } from "@/components/status-banner";
@@ -28,7 +29,7 @@ export default async function MonthlyReviewPage({ searchParams }: { searchParams
         supabase.from("asset_categories").select("id, name, sort_order, tracking_currency").eq("user_id", user.id).order("sort_order"),
         supabase.from("holdings").select("category_id, currency, current_value, current_value_inr, exchange_rate_to_inr").eq("user_id", user.id).eq("is_active", true),
         supabase.from("sip_plans").select("category_id, monthly_amount").eq("user_id", user.id).eq("is_active", true),
-        supabase.from("monthly_category_performance").select("category_id, performance_month, is_baseline, opening_value_inr, contribution_inr, contribution_native, contribution_fx_rate, closing_native_value, closing_fx_rate, market_gain_inr, currency_gain_inr, combined_gain_inr").eq("user_id", user.id).order("performance_month", { ascending: false }),
+        supabase.from("monthly_category_performance").select("category_id, performance_month, is_baseline, period_months, opening_value_inr, contribution_inr, contribution_native, contribution_fx_rate, closing_native_value, closing_fx_rate, market_gain_inr, currency_gain_inr, combined_gain_inr").eq("user_id", user.id).order("performance_month", { ascending: false }),
         supabase.from("profiles").select("default_usd_inr_rate").eq("user_id", user.id).maybeSingle(),
     ]);
 
@@ -67,6 +68,14 @@ export default async function MonthlyReviewPage({ searchParams }: { searchParams
     const history = historyResult.data ?? [];
     const defaultRate = toNumber(profileResult.data?.default_usd_inr_rate) || 1;
     const currentByCategory = new Map(history.filter((row) => row.performance_month === month).map((row) => [row.category_id, row]));
+    const categoryById = new Map(categories.map((category) => [category.id, category]));
+    const currencyMismatches = holdings.flatMap((holding) => {
+        const category = categoryById.get(holding.category_id);
+        const expected = category?.tracking_currency === "USD" ? "USD" : "INR";
+        return category && holding.currency !== expected
+            ? [`${category.name}: holding currency ${holding.currency}, expected ${expected}`]
+            : [];
+    });
 
     const formRows: MonthlyReviewFormRow[] = categories.map((category) => {
         const currency = (category.tracking_currency === "USD" ? "USD" : "INR") as TrackingCurrency;
@@ -109,6 +118,7 @@ export default async function MonthlyReviewPage({ searchParams }: { searchParams
 
     const monthlyReturns = buildMonthlyPortfolioReturns(history.map((row) => ({
         performanceMonth: row.performance_month,
+        periodMonths: toNumber(row.period_months) || 1,
         isBaseline: Boolean(row.is_baseline),
         openingValueInr: toNumber(row.opening_value_inr),
         contributionInr: toNumber(row.contribution_inr),
@@ -128,6 +138,17 @@ export default async function MonthlyReviewPage({ searchParams }: { searchParams
         <main><div className="mx-auto max-w-6xl px-4 py-8">
             <PageHeader title="Monthly Review" description="Record actual contributions once a month and separate real market movement from USD/INR currency movement." />
             <StatusBanner success={params.success} error={params.error} />
+            {currencyMismatches.length > 0 ? (
+                <section role="alert" className="mb-6 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+                    <p className="font-semibold">Fix holding currencies before saving this review</p>
+                    <ul className="mt-2 list-disc space-y-1 pl-5">
+                        {currencyMismatches.map((message) => <li key={message}>{message}</li>)}
+                    </ul>
+                    <Link href="/holdings" className="mt-3 inline-flex font-semibold underline underline-offset-2">
+                        Open holdings
+                    </Link>
+                </section>
+            ) : null}
 
             <section className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <Summary label="Actual contribution" value={formatCurrency(totals.contribution)} helper="Confirmed, not planned SIP" />
@@ -174,6 +195,7 @@ export default async function MonthlyReviewPage({ searchParams }: { searchParams
                                             {formatMonth(row.performanceMonth)}
                                             {row.baselineRows > 0 && row.trackedRows === 0 ? <span className="ml-2 rounded-full bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700">Baseline</span> : null}
                                             {row.baselineRows > 0 && row.trackedRows > 0 ? <span className="ml-2 rounded-full bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700">Partial</span> : null}
+                                            {row.intervalMonths > 1 ? <span className="ml-2 rounded-full bg-violet-50 px-2 py-1 text-xs font-medium text-violet-700">{row.intervalMonths}-month interval</span> : null}
                                         </td>
                                         <td className="px-5 py-4 text-right tabular-nums">{row.capitalBaseInr > 0 ? formatCurrency(row.capitalBaseInr) : "—"}</td>
                                         <td className="px-5 py-4 text-right tabular-nums">{formatCurrency(row.contributionInr)}</td>
@@ -188,7 +210,11 @@ export default async function MonthlyReviewPage({ searchParams }: { searchParams
                 ) : <p className="border-t border-slate-100 p-5 text-sm text-slate-500">Save the first monthly review to establish the performance baseline.</p>}
             </section>
 
-            {formRows.length > 0 ? <MonthlyReviewForm rows={formRows} action={saveMonthlyReview} /> : <div className="rounded-xl border bg-white p-8 text-center text-slate-500">Create an asset category first.</div>}
+            {formRows.length > 0 && currencyMismatches.length === 0
+                ? <MonthlyReviewForm rows={formRows} action={saveMonthlyReview} />
+                : formRows.length === 0
+                    ? <div className="rounded-xl border bg-white p-8 text-center text-slate-500">Create an asset category first.</div>
+                    : null}
         </div></main>
     );
 }

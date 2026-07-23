@@ -153,6 +153,34 @@ test("links only consecutive contribution-adjusted monthly returns", () => {
     assert.equal(calculateLinkedReturn(monthly, 3), null);
 });
 
+test("does not label a multi-month review interval as a monthly linked return", () => {
+    const rows = buildMonthlyPortfolioReturns([
+        {
+            performanceMonth: "2026-06-01",
+            periodMonths: 1,
+            isBaseline: false,
+            openingValueInr: 100,
+            contributionInr: 0,
+            marketGainInr: 10,
+            currencyGainInr: 0,
+            combinedGainInr: 10,
+        },
+        {
+            performanceMonth: "2026-07-01",
+            periodMonths: 2,
+            isBaseline: false,
+            openingValueInr: 110,
+            contributionInr: 0,
+            marketGainInr: 11,
+            currencyGainInr: 0,
+            combinedGainInr: 11,
+        },
+    ]);
+
+    assert.equal(rows[1].intervalMonths, 2);
+    assert.equal(calculateLinkedReturn(rows, 2), null);
+});
+
 test("calculates the contribution required to reach a target without selling", () => {
     assert.equal(contributionNeededWithoutSelling(10000, 100000, 20), 12500);
     assert.equal(contributionNeededWithoutSelling(30000, 100000, 20), 0);

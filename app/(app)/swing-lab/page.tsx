@@ -178,6 +178,10 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
     const gateEntries = Object.entries(numberRecord(latestScan?.gate_counts)).filter(([, count]) => count > 0);
     const slotCapital = num(settings.trading_capital_inr) / Math.max(settings.max_open_positions, 1);
     const riskBudget = num(settings.trading_capital_inr) * num(settings.risk_per_trade_percentage) / 100;
+    const effectiveRiskPercentage = latestScan?.effective_risk_percentage === null || latestScan?.effective_risk_percentage === undefined
+        ? num(settings.risk_per_trade_percentage)
+        : num(latestScan.effective_risk_percentage);
+    const effectiveRiskBudget = num(settings.trading_capital_inr) * effectiveRiskPercentage / 100;
 
     return <main><div className="mx-auto max-w-7xl px-4 py-8">
         <PageHeader title="Swing Lab" description="End-of-day Indian equity candidates, manually confirmed entries, protective stops, exit signals, and a separate swing-trade journal." />
@@ -238,7 +242,7 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
         <section className="mt-8 rounded-xl border border-slate-200 bg-white p-5">
             <h2 className="text-lg font-semibold">Swing Lab risk settings</h2>
             <p className="mt-1 text-sm text-slate-500">These settings control suggested quantities and analyzer candidate gates. Start in paper mode.</p>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2"><SmallMetric label="Capital available per slot" value={money(slotCapital)} /><SmallMetric label="Maximum planned loss per trade" value={money(riskBudget)} /></div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-3"><SmallMetric label="Capital available per slot" value={money(slotCapital)} /><SmallMetric label="Configured risk budget" value={money(riskBudget)} /><SmallMetric label="Current regime risk budget" value={money(effectiveRiskBudget)} /></div>
             {num(settings.trading_capital_inr) <= 10000 && settings.max_open_positions > 2 ? <p role="alert" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">With {money(settings.trading_capital_inr)}, use at most two positions. More slots can cause otherwise valid stocks to receive a suggested quantity of zero.</p> : null}
             <form action={saveSwingSettings} className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <NumberField name="trading_capital_inr" label="Trading capital (INR)" value={num(settings.trading_capital_inr)} min={0} step={1000} />

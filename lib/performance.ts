@@ -54,6 +54,7 @@ export type NewMoneyAllocationResult = {
 
 export type ContributionAdjustedPerformanceInput = {
     performanceMonth: string;
+    periodMonths?: number;
     isBaseline: boolean;
     openingValueInr: number;
     contributionInr: number;
@@ -73,6 +74,7 @@ export type ContributionAdjustedReturn = {
     combinedReturnPercentage: number | null;
     trackedRows: number;
     baselineRows: number;
+    intervalMonths: number;
 };
 
 export type MonthlyPortfolioReturn = ContributionAdjustedReturn & {
@@ -283,6 +285,10 @@ export function calculateContributionAdjustedReturn(
         combinedReturnPercentage: percentageOf(totals.combinedGainInr, totals.capitalBaseInr),
         trackedRows: eligibleRows.length,
         baselineRows: rows.length - eligibleRows.length,
+        intervalMonths: rows.reduce(
+            (maximum, row) => Math.max(maximum, Math.max(1, Math.trunc(row.periodMonths ?? 1))),
+            1
+        ),
     };
 }
 
@@ -314,7 +320,10 @@ export function calculateLinkedReturn(
 ) {
     if (!Number.isInteger(windowSize) || windowSize <= 0) return null;
     const eligible = monthlyReturns.filter(
-        (row) => row.combinedReturnPercentage !== null && row.baselineRows === 0
+        (row) =>
+            row.combinedReturnPercentage !== null
+            && row.baselineRows === 0
+            && row.intervalMonths === 1
     );
     if (eligible.length < windowSize) return null;
 

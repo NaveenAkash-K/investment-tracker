@@ -17,15 +17,41 @@ const TABLES = [
     "news_event_evaluations", "market_event_alerts",
 ] as const;
 
+const PAGE_SIZE = 1000;
+
+async function fetchAllRows(
+    supabase: Awaited<ReturnType<typeof createClient>>,
+    table: (typeof TABLES)[number],
+    userId: string
+) {
+    const rows: Record<string, unknown>[] = [];
+    let from = 0;
+
+    while (true) {
+        const { data, error } = await supabase
+            .from(table)
+            .select("*")
+            .eq("user_id", userId)
+            .range(from, from + PAGE_SIZE - 1);
+
+        if (error) return { data: rows, error };
+
+        const page = (data ?? []) as Record<string, unknown>[];
+        rows.push(...page);
+        if (page.length < PAGE_SIZE) return { data: rows, error: null };
+        from += PAGE_SIZE;
+    }
+}
+
 export async function GET() {
     const supabase = await createClient();
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const results = await Promise.all(TABLES.map(async (table) => {
-        const { data, error } = await supabase.from(table).select("*").eq("user_id", user.id);
-        return { table, data: data ?? [], error };
-    }));
+    const results = await Promise.all(TABLES.map(async (table) => ({
+        table,
+        ...await fetchAllRows(supabase, table, user.id),
+    })));
     const failed = results.find((result) => result.error);
     if (failed?.error) return NextResponse.json({ error: failed.error.message, table: failed.table }, { status: 500 });
 

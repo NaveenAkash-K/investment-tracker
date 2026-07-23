@@ -69,13 +69,23 @@ async function assertCategoryBelongsToUser(
 ) {
     const { data, error } = await supabase
         .from("asset_categories")
-        .select("id")
+        .select("id, tracking_currency")
         .eq("id", categoryId)
         .eq("user_id", userId)
         .maybeSingle();
 
     if (error || !data) {
         throw new Error("Invalid asset category.");
+    }
+
+    return data.tracking_currency === "USD" ? "USD" : "INR";
+}
+
+function assertCurrencyMatchesCategory(currency: string, trackingCurrency: string) {
+    if (currency !== trackingCurrency) {
+        throw new Error(
+            `This category is tracked in ${trackingCurrency}. Change the holding currency to ${trackingCurrency} or move it to a matching category.`
+        );
     }
 }
 
@@ -143,7 +153,8 @@ export async function addHolding(formData: FormData) {
         exchangeRateToInr,
     });
 
-    await assertCategoryBelongsToUser(supabase, userId, categoryId);
+    const trackingCurrency = await assertCategoryBelongsToUser(supabase, userId, categoryId);
+    assertCurrencyMatchesCategory(currency, trackingCurrency);
 
     const { error } = await supabase.from("holdings").insert({
         user_id: userId,
@@ -192,7 +203,8 @@ export async function updateHolding(formData: FormData) {
     });
 
     await assertHoldingBelongsToUser(supabase, userId, holdingId);
-    await assertCategoryBelongsToUser(supabase, userId, categoryId);
+    const trackingCurrency = await assertCategoryBelongsToUser(supabase, userId, categoryId);
+    assertCurrencyMatchesCategory(currency, trackingCurrency);
 
     const { error } = await supabase
         .from("holdings")
