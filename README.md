@@ -17,7 +17,7 @@ The Targets page includes a new-money allocation autopilot. It uses the entered 
 
 1. Install packages with `npm install`.
 2. Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` to `.env.local`.
-3. For a new Supabase project, apply every SQL file in `supabase/migrations` in filename order, starting with [the initial schema](supabase/migrations/202607190001_initial_schema.sql). For an existing installation, apply only migrations newer than the last one already run. The current final migration is [the correctness migration](supabase/migrations/202607230001_correctness_fixes.sql).
+3. For a new Supabase project, apply every SQL file in `supabase/migrations` in filename order, starting with [the initial schema](supabase/migrations/202607190001_initial_schema.sql). For an existing installation, apply only migrations newer than the last one already run. The current final migration is [the Swing Lab morning-monitor migration](supabase/migrations/202607230002_swing_intraday_monitor.sql).
 4. Run `npm run dev` and open `http://localhost:3000`.
 
 The migration is transactional. It adds monthly performance storage, archive-safe category behavior, single-current-note enforcement, and database functions used for atomic imports, bulk edits, snapshots, targets, categories, and full restores.
@@ -37,7 +37,7 @@ The service-role key must never be placed in `.env.local`, browser code or any p
 
 Swing Lab is a separate risk budget and journal for end-of-day Indian-equity swing trades. It does not change long-term holdings, SIP allocations, or Monthly Review.
 
-1. Apply both Swing Lab migrations and the final correctness migration. The dedicated weekday Swing Lab workflow runs at 17:30 IST after the Indian session; the 08:00 IST portfolio workflow deliberately skips Swing Lab.
+1. Apply both Swing Lab migrations, the correctness migration, and the morning-monitor migration. The 09:25 IST weekday monitor checks only existing candidates and positions; the 17:30 IST workflow calculates completed-session regime and candidates. The 08:00 IST portfolio workflow deliberately skips Swing Lab.
 2. Set trading capital, risk per trade, position limits, sector limit, and the minimum setup score in **Swing Lab → Risk controls**. Keep paper mode on while validating the process.
 3. A candidate is only a plan. Buy only after its entry trigger trades and never above the displayed maximum-entry price.
 4. After an actual or paper fill, confirm its date, price, and quantity in Swing Lab. This is the only action that creates an open trade.
