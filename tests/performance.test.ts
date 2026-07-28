@@ -8,6 +8,9 @@ import {
     calculateNewMoneyAllocation,
     contributionNeededWithoutSelling,
     getIndiaDate,
+    getLatestExpectedDailyRunDate,
+    getLatestExpectedWeekdayRunDate,
+    getIndiaMonthKey,
 } from "../lib/performance.ts";
 
 test("separates USD market growth from currency appreciation", () => {
@@ -189,4 +192,20 @@ test("calculates the contribution required to reach a target without selling", (
 test("formats dates in India time instead of UTC", () => {
     const utcEvening = new Date("2026-07-19T19:30:00.000Z");
     assert.equal(getIndiaDate(utcEvening), "2026-07-20");
+    assert.equal(getIndiaMonthKey("2026-06-30T19:30:00.000Z"), "2026-07");
+});
+
+test("calculates schedule-aware heartbeat dates in India time", () => {
+    assert.equal(
+        getLatestExpectedDailyRunDate(8, 0, 120, new Date("2026-07-28T05:00:00.000Z")),
+        "2026-07-28"
+    );
+    assert.equal(
+        getLatestExpectedWeekdayRunDate(9, 25, 95, new Date("2026-07-27T04:30:00.000Z")),
+        "2026-07-24"
+    );
+    assert.equal(
+        getLatestExpectedWeekdayRunDate(9, 25, 95, new Date("2026-07-27T06:00:00.000Z")),
+        "2026-07-27"
+    );
 });

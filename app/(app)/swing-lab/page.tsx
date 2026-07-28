@@ -5,11 +5,14 @@ import { PageHeader } from "@/components/page-header";
 import { StatusBanner } from "@/components/status-banner";
 import { FormSubmitButton } from "@/components/form-submit-button";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
+import { AnalyzerContractStatus } from "@/components/analyzer-contract-status";
+import { isUsableSwingScan } from "@/lib/analyzer-contract";
 import { calculateSwingPerformance, calculateSwingQuantity } from "@/lib/swing";
-import { getIndiaDate } from "@/lib/performance";
+import { getIndiaDate, getLatestExpectedWeekdayRunDate } from "@/lib/performance";
 import {
     confirmSwingEntry,
     confirmSwingExit,
+    reconcileSwingCorporateAction,
     saveSwingSettings,
     skipSwingCandidate,
     updateSwingStop,
@@ -25,23 +28,24 @@ type Settings = {
     paper_mode: boolean;
 };
 type Scan = {
-    id: string; as_of: string; status: string; model_version: string; market_regime: string;
+    id: string; as_of: string; status: string; model_version: string; contract_version: string | null; publication_status: string | null; market_regime: string;
     raw_market_regime: string; regime_confirmed: boolean; regime_reason: string | null;
     regime_confirmation_reason: string | null;
     benchmark_symbol: string | null; benchmark_close: number | string | null;
     benchmark_sma50: number | string | null; benchmark_sma200: number | string | null;
     benchmark_distance_200_percentage: number | string | null; benchmark_price_date: string | null;
+    expected_price_session: string | null; session_matches_expected: boolean; session_state: string;
     breadth_percentage: number | string | null; breadth_available: number; breadth_coverage_percentage: number | string | null;
     universe_size: number; eligible_size: number; published_size: number;
     effective_minimum_score: number | string | null; effective_risk_percentage: number | string | null;
     scan_blocked_reason: string | null; gate_counts: unknown; data_issues: unknown;
 };
 type Candidate = {
-    id: string; signal_key: string; symbol: string; company_name: string; sector: string | null;
+    id: string; scan_id: string; signal_key: string; symbol: string; company_name: string; sector: string | null;
     setup_type: string; status: string; setup_score: number | string; setup_as_of: string; expires_on: string;
     market_regime: string; close_price: number | string; entry_trigger: number | string;
     maximum_entry: number | string; initial_stop: number | string; atr: number | string;
-    risk_per_share: number | string; reward_risk_ratio: number | string | null;
+    risk_per_share: number | string;
     suggested_quantity: number; suggested_risk_inr: number | string; last_price: number | string | null;
     last_price_as_of: string | null; score_components: unknown; reasons: unknown; invalidation_reason: string | null;
 };
@@ -57,6 +61,11 @@ type Trade = {
     exit_signal_at: string | null; exit_date: string | null; exit_price: number | string | null;
     fees_inr: number | string; realized_pnl_inr: number | string | null;
     realized_r_multiple: number | string | null; notes: string | null;
+    corporate_action_review_required: boolean; corporate_action_reason: string | null;
+};
+type MonitorRun = {
+    id: string; as_of: string; status: string; contract_version: string | null; price_observed_at: string | null;
+    candidates_checked: number; positions_checked: number; notification_count: number;
 };
 
 const defaults: Settings = {
@@ -143,26 +152,30 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) redirect("/auth/login");
 
-    const [settingsResult, scanResult, candidatesResult, tradesResult] = await Promise.all([
+    const [settingsResult, scanResult, monitorResult, candidatesResult, tradesResult] = await Promise.all([
         supabase.from("swing_lab_settings").select("trading_capital_inr, risk_per_trade_percentage, max_open_positions, max_sector_positions, minimum_setup_score, paper_mode").eq("user_id", user.id).maybeSingle(),
-        supabase.from("swing_scan_runs").select("id, as_of, status, model_version, market_regime, raw_market_regime, regime_confirmed, regime_reason, regime_confirmation_reason, benchmark_symbol, benchmark_close, benchmark_sma50, benchmark_sma200, benchmark_distance_200_percentage, benchmark_price_date, breadth_percentage, breadth_available, breadth_coverage_percentage, universe_size, eligible_size, published_size, effective_minimum_score, effective_risk_percentage, scan_blocked_reason, gate_counts, data_issues").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
-        supabase.from("swing_candidates").select("id, signal_key, symbol, company_name, sector, setup_type, status, setup_score, setup_as_of, expires_on, market_regime, close_price, entry_trigger, maximum_entry, initial_stop, atr, risk_per_share, reward_risk_ratio, suggested_quantity, suggested_risk_inr, last_price, last_price_as_of, score_components, reasons, invalidation_reason").eq("user_id", user.id).order("setup_as_of", { ascending: false }).limit(100),
-        supabase.from("swing_trades").select("id, candidate_id, symbol, company_name, sector, trade_mode, status, signal_entry, maximum_entry, entry_date, entry_price, quantity, initial_stop, current_stop, initial_risk_per_share, planned_risk_inr, current_price, current_price_as_of, highest_close, unrealized_pnl_inr, unrealized_r_multiple, exit_signal_reason, exit_signal_at, exit_date, exit_price, fees_inr, realized_pnl_inr, realized_r_multiple, notes").eq("user_id", user.id).order("entry_date", { ascending: false }).limit(200),
+        supabase.from("swing_scan_runs").select("id, as_of, status, model_version, contract_version, publication_status, market_regime, raw_market_regime, regime_confirmed, regime_reason, regime_confirmation_reason, benchmark_symbol, benchmark_close, benchmark_sma50, benchmark_sma200, benchmark_distance_200_percentage, benchmark_price_date, expected_price_session, session_matches_expected, session_state, breadth_percentage, breadth_available, breadth_coverage_percentage, universe_size, eligible_size, published_size, effective_minimum_score, effective_risk_percentage, scan_blocked_reason, gate_counts, data_issues").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
+        supabase.from("swing_monitor_runs").select("id, as_of, status, contract_version, price_observed_at, candidates_checked, positions_checked, notification_count").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
+        supabase.from("swing_candidates").select("id, scan_id, signal_key, symbol, company_name, sector, setup_type, status, setup_score, setup_as_of, expires_on, market_regime, close_price, entry_trigger, maximum_entry, initial_stop, atr, risk_per_share, suggested_quantity, suggested_risk_inr, last_price, last_price_as_of, score_components, reasons, invalidation_reason").eq("user_id", user.id).order("setup_as_of", { ascending: false }).limit(100),
+        supabase.from("swing_trades").select("id, candidate_id, symbol, company_name, sector, trade_mode, status, signal_entry, maximum_entry, entry_date, entry_price, quantity, initial_stop, current_stop, initial_risk_per_share, planned_risk_inr, current_price, current_price_as_of, highest_close, unrealized_pnl_inr, unrealized_r_multiple, exit_signal_reason, exit_signal_at, exit_date, exit_price, fees_inr, realized_pnl_inr, realized_r_multiple, notes, corporate_action_review_required, corporate_action_reason").eq("user_id", user.id).order("entry_date", { ascending: false }).limit(200),
     ]);
     const params = await searchParams;
-    const queryError = settingsResult.error || scanResult.error || candidatesResult.error || tradesResult.error;
+    const queryError = settingsResult.error || scanResult.error || monitorResult.error || candidatesResult.error || tradesResult.error;
     if (queryError) {
-        return <main className="mx-auto max-w-5xl px-4 py-8"><div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-800"><h1 className="font-semibold">Swing Lab migration required</h1><p className="mt-2 text-sm">{queryError.message}</p><p className="mt-2 text-xs">Apply the pending Supabase migrations through <code>202607220001_swing_lab_v2.sql</code>, then reload this page.</p></div></main>;
+        return <main className="mx-auto max-w-5xl px-4 py-8"><div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-800"><h1 className="font-semibold">Swing Lab migration required</h1><p className="mt-2 text-sm">{queryError.message}</p><p className="mt-2 text-xs">Apply the pending Supabase migrations through <code>202607280001_review_correctness.sql</code>, then reload this page.</p></div></main>;
     }
 
     const settings = (settingsResult.data ?? defaults) as Settings;
     const latestScan = scanResult.data as Scan | null;
+    const latestMonitor = monitorResult.data as MonitorRun | null;
     const candidates = (candidatesResult.data ?? []) as Candidate[];
     const trades = (tradesResult.data ?? []) as Trade[];
+    const now = new Date();
+    const currentIndiaDate = getIndiaDate(now);
     const activeCandidates = candidates
-        .filter((candidate) => ["candidate", "ready", "triggered"].includes(candidate.status))
+        .filter((candidate) => ["candidate", "ready", "triggered"].includes(candidate.status) && candidate.expires_on >= currentIndiaDate)
         .sort((left, right) => (right.status === "triggered" ? 1 : 0) - (left.status === "triggered" ? 1 : 0) || num(right.setup_score) - num(left.setup_score));
-    const inactiveCandidates = candidates.filter((candidate) => ["skipped", "expired", "invalidated"].includes(candidate.status)).slice(0, 12);
+    const inactiveCandidates = candidates.filter((candidate) => ["skipped", "expired", "invalidated"].includes(candidate.status) || candidate.expires_on < currentIndiaDate).slice(0, 12);
     const openTrades = trades.filter((trade) => trade.status !== "closed");
     const closedTrades = trades.filter((trade) => trade.status === "closed").slice(0, 30);
     const metrics = calculateSwingPerformance(trades.map((trade) => ({
@@ -182,10 +195,31 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
         ? num(settings.risk_per_trade_percentage)
         : num(latestScan.effective_risk_percentage);
     const effectiveRiskBudget = num(settings.trading_capital_inr) * effectiveRiskPercentage / 100;
+    const expectedScanDate = getLatestExpectedWeekdayRunDate(17, 30, 90, now);
+    const expectedMonitorDate = getLatestExpectedWeekdayRunDate(9, 25, 95, now);
+    const scanHeartbeatMissed = !latestScan || getIndiaDate(new Date(latestScan.as_of)) < expectedScanDate;
+    const monitorHeartbeatMissed = !latestMonitor || getIndiaDate(new Date(latestMonitor.as_of)) < expectedMonitorDate;
+    const latestScanUsable = isUsableSwingScan(latestScan ? {
+        status: latestScan.status,
+        sessionState: latestScan.session_state,
+        sessionMatchesExpected: latestScan.session_matches_expected,
+        contractVersion: latestScan.contract_version,
+        publicationStatus: latestScan.publication_status,
+    } : null);
+    const candidateEntryAllowed = latestScanUsable && !scanHeartbeatMissed;
+    const candidateEntryBlockedReason = scanHeartbeatMissed
+        ? "A fresh end-of-day scan has not been published for the expected workflow date."
+        : !latestScanUsable
+            ? "The latest scan is failed, stale, unpublished, or uses an unsupported contract."
+            : null;
 
     return <main><div className="mx-auto max-w-7xl px-4 py-8">
         <PageHeader title="Swing Lab" description="End-of-day Indian equity candidates, manually confirmed entries, protective stops, exit signals, and a separate swing-trade journal." />
         <StatusBanner success={params.success} error={params.error} />
+        {latestScan ? <AnalyzerContractStatus version={latestScan.contract_version} publisher="Swing scan" /> : null}
+        {latestMonitor ? <AnalyzerContractStatus version={latestMonitor.contract_version} publisher="Swing monitor" /> : null}
+        {scanHeartbeatMissed ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900"><p className="font-semibold">End-of-day scan heartbeat is missing</p><p className="mt-1">No scan was published for the latest expected workflow date, {date(expectedScanDate)}. Check the GitHub Action and Tracker publication logs.</p></div> : latestScan?.status === "failed" ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">The latest end-of-day scan failed. Do not treat older candidates as newly validated.</div> : null}
+        {monitorHeartbeatMissed ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900"><p className="font-semibold">Morning monitor heartbeat is missing</p><p className="mt-1">No monitor was published for the latest expected workflow date, {date(expectedMonitorDate)}. Verify open positions directly with your broker until the job recovers.</p></div> : latestMonitor?.status === "failed" ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">The latest morning monitor failed. Stops and candidate triggers may not be current.</div> : null}
 
         <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
             <Summary label="Trading capital" value={money(settings.trading_capital_inr)} helper={settings.paper_mode ? "Paper mode" : "Live mode"} />
@@ -203,6 +237,7 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
             {latestScan ? <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
                 <SmallMetric label="As of" value={dateTime(latestScan.as_of)} />
                 <SmallMetric label="Price session" value={date(latestScan.benchmark_price_date)} />
+                <SmallMetric label="Expected session" value={date(latestScan.expected_price_session)} />
                 <SmallMetric label="Nifty close" value={latestScan.benchmark_close === null ? "N/A" : num(latestScan.benchmark_close).toFixed(0)} />
                 <SmallMetric label="50-day average" value={latestScan.benchmark_sma50 === null ? "N/A" : num(latestScan.benchmark_sma50).toFixed(0)} />
                 <SmallMetric label="200-day average" value={latestScan.benchmark_sma200 === null ? "N/A" : num(latestScan.benchmark_sma200).toFixed(0)} />
@@ -217,18 +252,28 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
                 <p className="mt-2 text-xs font-medium text-slate-600">Controls used: minimum score {latestScan.effective_minimum_score === null ? "N/A" : num(latestScan.effective_minimum_score).toFixed(0)} · risk {latestScan.effective_risk_percentage === null ? "N/A" : `${num(latestScan.effective_risk_percentage).toFixed(2)}%`} · {latestScan.eligible_size} passed · {latestScan.published_size} published</p>
             </div> : null}
             {latestScan?.scan_blocked_reason ? <div role="status" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><p className="font-semibold">Candidate scan status</p><p className="mt-1">{latestScan.scan_blocked_reason}</p></div> : null}
+            {latestScan && latestScan.session_state === "completed" && !latestScan.session_matches_expected ? <div role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900"><p className="font-semibold">Stale price session blocked</p><p className="mt-1">The analyzer did not publish actionable candidates because the provider session did not match the expected NSE session.</p></div> : null}
             {gateEntries.length > 0 ? <details className="mt-4 rounded-lg border border-slate-200 p-4"><summary className="cursor-pointer text-sm font-semibold">Candidate gate funnel</summary><div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{gateEntries.map(([key, count]) => <div key={key} className="flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2 text-sm"><span className="text-slate-600">{gateLabels[key] ?? key.replaceAll("_", " ")}</span><strong>{count}</strong></div>)}</div><p className="mt-3 text-xs text-slate-500">Each stock is counted at its first failed gate. In RED or UNKNOWN, stock-level gates are deliberately not evaluated.</p></details> : null}
             {scanIssues.length > 0 ? <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800"><p className="font-semibold">Scan data limitations</p><ul className="mt-2 space-y-1">{scanIssues.map((issue) => <li key={issue}>• {issue}</li>)}</ul></div> : null}
         </section>
 
+        <section className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div><h2 className="font-semibold">Morning monitor heartbeat</h2><p className="mt-1 text-sm text-slate-500">Confirms whether the scheduled candidate and protective-stop check actually published.</p></div>
+                {latestMonitor ? <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase ${latestMonitor.status === "successful" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>{latestMonitor.status}</span> : null}
+            </div>
+            {latestMonitor ? <p className="mt-3 text-sm text-slate-600">Ran {dateTime(latestMonitor.as_of)} · price observed {dateTime(latestMonitor.price_observed_at)} · checked {latestMonitor.candidates_checked} candidates and {latestMonitor.positions_checked} positions · {latestMonitor.notification_count} actions.</p> : <p className="mt-3 text-sm text-slate-500">No morning-monitor run has been published since the heartbeat migration was applied.</p>}
+        </section>
+
         <section className="mt-6">
-            <div className="flex items-end justify-between gap-4"><div><h2 className="text-xl font-semibold">Actionable candidates</h2><p className="mt-1 text-sm text-slate-500">Review the conditional entry, maximum acceptable price, stop and expiry before acting.</p></div><span className="text-sm text-slate-500">{activeCandidates.length} active</span></div>
-            {activeCandidates.length ? <div className="mt-4 grid gap-4 xl:grid-cols-2">{activeCandidates.map((candidate) => <CandidateCard key={candidate.id} candidate={candidate} settings={settings} today={getIndiaDate()} />)}</div> : <div className="mt-4 rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">No active candidates. “No trade” is expected when the hard gates or setup quality are not satisfied.</div>}
+            <div className="flex items-end justify-between gap-4"><div><h2 className="text-xl font-semibold">{candidateEntryAllowed ? "Actionable candidates" : "Candidates for review"}</h2><p className="mt-1 text-sm text-slate-500">{candidateEntryAllowed ? "Review the conditional entry, maximum acceptable price, stop and expiry before acting." : "Older candidates remain visible for context, but entry confirmation is disabled until scan validity is restored."}</p></div><span className="text-sm text-slate-500">{activeCandidates.length} active</span></div>
+            {candidateEntryBlockedReason ? <div role="alert" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><p className="font-semibold">New entries are temporarily disabled</p><p className="mt-1">{candidateEntryBlockedReason}</p></div> : null}
+            {activeCandidates.length ? <div className="mt-4 grid gap-4 xl:grid-cols-2">{activeCandidates.map((candidate) => <CandidateCard key={candidate.id} candidate={candidate} settings={settings} today={currentIndiaDate} entryAllowed={candidateEntryAllowed} entryBlockedReason={candidateEntryBlockedReason} carriedForward={Boolean(latestScan && candidate.scan_id !== latestScan.id)} />)}</div> : <div className="mt-4 rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">No active candidates. “No trade” is expected when the hard gates or setup quality are not satisfied.</div>}
         </section>
 
         <section className="mt-8">
             <div><h2 className="text-xl font-semibold">Open positions</h2><p className="mt-1 text-sm text-slate-500">Analyzer prices and stops are indicative until you confirm the real exit from your broker.</p></div>
-            {openTrades.length ? <div className="mt-4 grid gap-4 xl:grid-cols-2">{openTrades.map((trade) => <OpenTradeCard key={trade.id} trade={trade} today={getIndiaDate()} />)}</div> : <div className="mt-4 rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">No confirmed paper or live positions.</div>}
+            {openTrades.length ? <div className="mt-4 grid gap-4 xl:grid-cols-2">{openTrades.map((trade) => <OpenTradeCard key={trade.id} trade={trade} today={currentIndiaDate} />)}</div> : <div className="mt-4 rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">No confirmed paper or live positions.</div>}
         </section>
 
         <section className="mt-8 overflow-hidden rounded-xl border border-slate-200 bg-white">
@@ -257,7 +302,7 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
     </div></main>;
 }
 
-function CandidateCard({ candidate, settings, today }: { candidate: Candidate; settings: Settings; today: string }) {
+function CandidateCard({ candidate, settings, today, entryAllowed, entryBlockedReason, carriedForward }: { candidate: Candidate; settings: Settings; today: string; entryAllowed: boolean; entryBlockedReason: string | null; carriedForward: boolean }) {
     const testOnly = candidate.setup_type.startsWith("TEST_");
     const suggestedQuantity = candidate.suggested_quantity || calculateSwingQuantity({
         tradingCapitalInr: num(settings.trading_capital_inr),
@@ -269,26 +314,28 @@ function CandidateCard({ candidate, settings, today }: { candidate: Candidate; s
     const risk = Math.max(num(candidate.entry_trigger) - num(candidate.initial_stop), 0) * suggestedQuantity;
     const triggered = candidate.status === "triggered";
     return <article className={`rounded-xl border bg-white p-5 ${triggered ? "border-emerald-300 ring-1 ring-emerald-100" : "border-slate-200"}`}>
-        <div className="flex items-start justify-between gap-4"><div><div className="flex flex-wrap items-center gap-2"><h3 className="text-lg font-bold">{candidate.symbol}</h3><span className={`rounded-full px-2.5 py-1 text-xs font-semibold uppercase ${triggered ? "bg-emerald-50 text-emerald-700" : "bg-blue-50 text-blue-700"}`}>{candidate.status}</span></div><p className="mt-1 text-sm text-slate-600">{candidate.company_name}</p><p className="mt-1 text-xs text-slate-400">{candidate.sector || "Sector unavailable"} · expires {date(candidate.expires_on)}</p></div><div className="text-right"><p className="text-xs uppercase tracking-wide text-slate-400">Setup score</p><p className="mt-1 text-2xl font-bold text-blue-700">{num(candidate.setup_score).toFixed(0)}</p></div></div>
+        <div className="flex items-start justify-between gap-4"><div><div className="flex flex-wrap items-center gap-2"><h3 className="text-lg font-bold">{candidate.symbol}</h3><span className={`rounded-full px-2.5 py-1 text-xs font-semibold uppercase ${triggered ? "bg-emerald-50 text-emerald-700" : "bg-blue-50 text-blue-700"}`}>{candidate.status}</span>{carriedForward ? <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold uppercase text-amber-800">Carried forward</span> : null}</div><p className="mt-1 text-sm text-slate-600">{candidate.company_name}</p><p className="mt-1 text-xs text-slate-400">{candidate.sector || "Sector unavailable"} · expires {date(candidate.expires_on)}</p></div><div className="text-right"><p className="text-xs uppercase tracking-wide text-slate-400">Setup score</p><p className="mt-1 text-2xl font-bold text-blue-700">{num(candidate.setup_score).toFixed(0)}</p></div></div>
         {testOnly ? <div role="alert" className="mt-4 rounded-lg border border-violet-200 bg-violet-50 p-3 text-sm text-violet-800"><strong>Test candidate:</strong> generated only to exercise the interface. It is forced to Paper and must not be treated as a live signal.</div> : null}
         <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4"><SmallMetric label="Entry above" value={decimalMoney(candidate.entry_trigger)} /><SmallMetric label="Maximum entry" value={decimalMoney(candidate.maximum_entry)} /><SmallMetric label="Initial stop" value={decimalMoney(candidate.initial_stop)} /><SmallMetric label="Suggested" value={`${suggestedQuantity} shares`} /></div>
-        <div className="mt-4 rounded-lg bg-slate-50 p-3 text-sm text-slate-600"><p><strong>Planned risk:</strong> {money(risk)} · <strong>Risk/share:</strong> {decimalMoney(candidate.risk_per_share)} · <strong>Indicative R:R:</strong> {candidate.reward_risk_ratio === null ? "N/A" : `${num(candidate.reward_risk_ratio).toFixed(1)}×`}</p>{stringList(candidate.reasons).length ? <ul className="mt-2 space-y-1 text-xs">{stringList(candidate.reasons).map((reason) => <li key={reason}>• {reason}</li>)}</ul> : null}</div>
-        <details className="mt-4 rounded-lg border border-slate-200 p-3"><summary className="cursor-pointer text-sm font-semibold">Confirm that I entered this trade</summary><form action={confirmSwingEntry} className="mt-4 grid gap-3 sm:grid-cols-2"><input type="hidden" name="candidate_id" value={candidate.id} /><NumberField name="entry_price" label={testOnly ? "Paper fill price" : "Actual fill price"} value={num(candidate.entry_trigger)} min={0.01} step={0.01} /><NumberField name="quantity" label="Actual quantity" value={suggestedQuantity} min={1} step={1} /><DateField name="entry_date" label="Entry date" value={today} />{testOnly ? <><input type="hidden" name="trade_mode" value="paper" /><div className="rounded-lg bg-violet-50 p-3 text-sm font-medium text-violet-800">Trade mode: Paper only</div></> : <label className="block text-sm font-medium text-slate-700">Trade mode<select name="trade_mode" defaultValue={settings.paper_mode ? "paper" : "live"} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2"><option value="paper">Paper</option><option value="live">Live</option></select></label>}<label className="block text-sm font-medium text-slate-700 sm:col-span-2">Note<input name="notes" placeholder="Optional entry note" className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2" /></label><div className="sm:col-span-2"><FormSubmitButton pendingText="Confirming entry...">{testOnly ? "Start test paper tracking" : "Start tracking actual entry"}</FormSubmitButton></div></form></details>
+        <div className="mt-4 rounded-lg bg-slate-50 p-3 text-sm text-slate-600"><p><strong>Planned risk:</strong> {money(risk)} · <strong>Risk/share:</strong> {decimalMoney(candidate.risk_per_share)}. Exits follow protective-stop, trailing-stop and time-review rules; there is no fixed profit target.</p>{stringList(candidate.reasons).length ? <ul className="mt-2 space-y-1 text-xs">{stringList(candidate.reasons).map((reason) => <li key={reason}>• {reason}</li>)}</ul> : null}</div>
+        {entryAllowed ? <details className="mt-4 rounded-lg border border-slate-200 p-3"><summary className="cursor-pointer text-sm font-semibold">Confirm that I entered this trade</summary><form action={confirmSwingEntry} className="mt-4 grid gap-3 sm:grid-cols-2"><input type="hidden" name="candidate_id" value={candidate.id} /><NumberField name="entry_price" label={testOnly ? "Paper fill price" : "Actual fill price"} value={num(candidate.entry_trigger)} min={0.01} step={0.01} /><NumberField name="quantity" label="Actual quantity" value={suggestedQuantity} min={1} step={1} /><DateField name="entry_date" label="Entry date" value={today} />{testOnly ? <><input type="hidden" name="trade_mode" value="paper" /><div className="rounded-lg bg-violet-50 p-3 text-sm font-medium text-violet-800">Trade mode: Paper only</div></> : <label className="block text-sm font-medium text-slate-700">Trade mode<select name="trade_mode" defaultValue={settings.paper_mode ? "paper" : "live"} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2"><option value="paper">Paper</option><option value="live">Live</option></select></label>}<label className="block text-sm font-medium text-slate-700 sm:col-span-2">Note<input name="notes" placeholder="Optional entry note" className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2" /></label><div className="sm:col-span-2"><FormSubmitButton pendingText="Confirming entry...">{testOnly ? "Start test paper tracking" : "Start tracking actual entry"}</FormSubmitButton></div></form></details> : <div role="status" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><p className="font-semibold">Entry confirmation unavailable</p><p className="mt-1">{entryBlockedReason ?? "Wait for a valid fresh scan before entering this candidate."}</p></div>}
         <form action={skipSwingCandidate} className="mt-3 flex flex-col gap-2 sm:flex-row"><input type="hidden" name="candidate_id" value={candidate.id} /><input name="reason" placeholder="Optional skip reason" className="min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm" /><ConfirmSubmitButton confirmation={`Skip ${candidate.symbol}?`} pendingText="Skipping...">Skip candidate</ConfirmSubmitButton></form>
     </article>;
 }
 
 function OpenTradeCard({ trade, today }: { trade: Trade; today: string }) {
+    const corporateActionReview = trade.corporate_action_review_required;
     const current = trade.current_price === null ? num(trade.entry_price) : num(trade.current_price);
     const pnl = trade.unrealized_pnl_inr === null ? (current - num(trade.entry_price)) * trade.quantity : num(trade.unrealized_pnl_inr);
     const r = trade.unrealized_r_multiple === null ? pnl / Math.max(num(trade.planned_risk_inr), 0.01) : num(trade.unrealized_r_multiple);
-    return <article className={`rounded-xl border bg-white p-5 ${trade.status === "exit_pending" ? "border-red-300 ring-1 ring-red-100" : "border-slate-200"}`}>
-        <div className="flex items-start justify-between gap-4"><div><div className="flex flex-wrap items-center gap-2"><h3 className="text-lg font-bold">{trade.symbol}</h3><span className={`rounded-full px-2.5 py-1 text-xs font-semibold uppercase ${trade.status === "exit_pending" ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"}`}>{trade.status.replace("_", " ")}</span><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium uppercase text-slate-600">{trade.trade_mode}</span></div><p className="mt-1 text-sm text-slate-600">{trade.quantity} shares · entered {date(trade.entry_date)}</p></div><div className="text-right"><p className={`text-xl font-bold ${pnl > 0 ? "text-emerald-700" : pnl < 0 ? "text-red-700" : "text-slate-950"}`}>{money(pnl)}</p><p className="text-xs font-medium text-slate-500">{signed(r, "R")}</p></div></div>
+    return <article className={`rounded-xl border bg-white p-5 ${corporateActionReview ? "border-amber-300 ring-1 ring-amber-100" : trade.status === "exit_pending" ? "border-red-300 ring-1 ring-red-100" : "border-slate-200"}`}>
+        <div className="flex items-start justify-between gap-4"><div><div className="flex flex-wrap items-center gap-2"><h3 className="text-lg font-bold">{trade.symbol}</h3><span className={`rounded-full px-2.5 py-1 text-xs font-semibold uppercase ${trade.status === "exit_pending" ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"}`}>{trade.status.replace("_", " ")}</span><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium uppercase text-slate-600">{trade.trade_mode}</span></div><p className="mt-1 text-sm text-slate-600">{trade.quantity} shares · entered {date(trade.entry_date)}</p></div><div className="text-right">{corporateActionReview ? <><p className="text-lg font-bold text-amber-700">Monitoring paused</p><p className="text-xs text-slate-500">P&L basis requires reconciliation</p></> : <><p className={`text-xl font-bold ${pnl > 0 ? "text-emerald-700" : pnl < 0 ? "text-red-700" : "text-slate-950"}`}>{money(pnl)}</p><p className="text-xs font-medium text-slate-500">{signed(r, "R")}</p></>}</div></div>
+        {corporateActionReview ? <div role="alert" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><p className="font-semibold">Corporate action detected</p><p className="mt-1">{trade.corporate_action_reason ?? "Confirm the broker-adjusted quantity, entry and stop values before monitoring resumes."}</p></div> : null}
         {trade.status === "exit_pending" ? <div className="mt-4 flex gap-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><div><p className="font-semibold">Exit action pending</p><p>{trade.exit_signal_reason ?? "A strategy exit condition was reached."}</p></div></div> : null}
         <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4"><SmallMetric label="Entry" value={decimalMoney(trade.entry_price)} /><SmallMetric label="Current" value={decimalMoney(current)} /><SmallMetric label="Protective stop" value={decimalMoney(trade.current_stop)} /><SmallMetric label="Highest close" value={decimalMoney(trade.highest_close ?? trade.entry_price)} /></div>
         <p className="mt-3 text-xs text-slate-400">Price as of {date(trade.current_price_as_of)}. A gap through the stop may fill below the displayed stop.</p>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <details className="rounded-lg border border-slate-200 p-3"><summary className="cursor-pointer text-sm font-semibold">Raise stop manually</summary><form action={updateSwingStop} className="mt-3 space-y-3"><input type="hidden" name="trade_id" value={trade.id} /><NumberField name="new_stop" label="New stop" value={num(trade.current_stop)} min={num(trade.current_stop)} step={0.01} /><input name="reason" placeholder="Reason" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" /><FormSubmitButton pendingText="Updating stop...">Update stop</FormSubmitButton></form></details>
+            {corporateActionReview ? <details className="rounded-lg border border-amber-200 p-3" open><summary className="cursor-pointer text-sm font-semibold">Reconcile broker-adjusted values</summary><form action={reconcileSwingCorporateAction} className="mt-3 space-y-3"><input type="hidden" name="trade_id" value={trade.id} /><p className="text-xs text-amber-800">Enter the values shown by your broker after the split or bonus. Zero placeholders must be replaced.</p><NumberField name="adjusted_entry_price" label="Adjusted average entry" value={0} min={0.01} step={0.01} /><NumberField name="adjusted_quantity" label="Adjusted quantity" value={0} min={1} step={1} /><NumberField name="adjusted_initial_stop" label="Adjusted initial stop" value={0} min={0.01} step={0.01} /><NumberField name="adjusted_current_stop" label="Adjusted current stop" value={0} min={0.01} step={0.01} /><input name="notes" required placeholder="Broker action and adjustment ratio" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" /><ConfirmSubmitButton confirmation={`Resume ${trade.symbol} monitoring with these broker-adjusted values?`} pendingText="Reconciling...">Save reconciliation</ConfirmSubmitButton></form></details> : <details className="rounded-lg border border-slate-200 p-3"><summary className="cursor-pointer text-sm font-semibold">Raise stop manually</summary><form action={updateSwingStop} className="mt-3 space-y-3"><input type="hidden" name="trade_id" value={trade.id} /><NumberField name="new_stop" label="New stop" value={num(trade.current_stop)} min={num(trade.current_stop)} step={0.01} /><input name="reason" placeholder="Reason" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" /><FormSubmitButton pendingText="Updating stop...">Update stop</FormSubmitButton></form></details>}
             <details className="rounded-lg border border-slate-200 p-3" open={trade.status === "exit_pending"}><summary className="cursor-pointer text-sm font-semibold">Confirm actual exit</summary><form action={confirmSwingExit} className="mt-3 space-y-3"><input type="hidden" name="trade_id" value={trade.id} /><DateField name="exit_date" label="Exit date" value={today} /><NumberField name="exit_price" label="Actual exit price" value={current} min={0.01} step={0.01} /><NumberField name="fees_inr" label="Total trade fees" value={0} min={0} step={0.01} /><input name="notes" placeholder="Optional exit note" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" /><ConfirmSubmitButton confirmation={`Close ${trade.symbol} using this actual exit?`} pendingText="Closing trade..." className="w-full bg-red-600 text-white hover:bg-red-700">Confirm exit</ConfirmSubmitButton></form></details>
         </div>
     </article>;

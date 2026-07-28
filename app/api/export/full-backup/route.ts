@@ -9,7 +9,7 @@ const TABLES = [
     "market_signal_runs", "market_signal_scores", "sip_signal_recommendations",
     "global_signal_recommendations", "market_signal_alerts",
     "category_signal_mappings", "sip_signal_mappings",
-    "swing_lab_settings", "swing_scan_runs", "swing_candidates",
+    "swing_lab_settings", "swing_scan_runs", "swing_monitor_runs", "swing_candidates",
     "swing_trades", "swing_trade_events",
     "news_settings", "news_sources", "news_pipeline_runs", "news_articles",
     "market_events", "market_event_articles", "market_event_impacts",
@@ -58,7 +58,7 @@ export async function GET() {
     const data = Object.fromEntries(results.map((result) => [result.table, result.data]));
     const body = JSON.stringify({
         format: "investment-tracker-backup",
-        version: 2,
+        version: 4,
         exported_at: new Date().toISOString(),
         data,
     }, null, 2);

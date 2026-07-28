@@ -121,6 +121,9 @@ function validateSipInput({
     if (monthlyAmount < 0) {
         throw new Error("Monthly SIP amount cannot be negative.");
     }
+    if (!Number.isInteger(monthlyAmount)) {
+        throw new Error("Planned SIP amount must be entered in whole rupees.");
+    }
 
     if (sipDay !== null && (sipDay < 1 || sipDay > 31)) {
         throw new Error("SIP day must be between 1 and 31.");
@@ -228,6 +231,9 @@ export async function bulkUpdateSipAmounts(formData: FormData) {
 
         if (monthlyAmount < 0) {
             throw new Error("Monthly SIP amount cannot be negative.");
+        }
+        if (!Number.isInteger(monthlyAmount)) {
+            throw new Error("Planned SIP amount must be entered in whole rupees.");
         }
 
         if (sipDay !== null && (sipDay < 1 || sipDay > 31)) {

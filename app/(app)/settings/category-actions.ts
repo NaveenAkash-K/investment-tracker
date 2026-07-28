@@ -68,6 +68,14 @@ function validateCategoryName(name: string) {
     }
 }
 
+const SIGNAL_ROLES = ["india_equity", "global_equity", "debt", "gold", "crypto", "cash", "other"] as const;
+
+function validateSignalRole(value: string) {
+    if (!SIGNAL_ROLES.includes(value as (typeof SIGNAL_ROLES)[number])) {
+        throw new Error("Invalid category signal role.");
+    }
+}
+
 function revalidateEverything() {
     revalidatePath("/settings");
     revalidatePath("/dashboard");
@@ -85,6 +93,7 @@ export async function addCategory(formData: FormData) {
     const sortOrder = readNumber(formData, "sort_order", 99);
     const targetPercentage = readNumber(formData, "target_percentage", 0);
     const trackingCurrency = readText(formData, "tracking_currency") || "INR";
+    const signalRole = readText(formData, "signal_role") || "other";
 
     validateCategoryName(name);
 
@@ -93,12 +102,14 @@ export async function addCategory(formData: FormData) {
     }
 
     if (!["INR", "USD"].includes(trackingCurrency)) throw new Error("Tracking currency must be INR or USD.");
+    validateSignalRole(signalRole);
 
-    const { error } = await supabase.rpc("add_asset_category", {
+    const { error } = await supabase.rpc("add_asset_category_v2", {
         p_name: name,
         p_sort_order: sortOrder,
         p_target_percentage: targetPercentage,
         p_tracking_currency: trackingCurrency,
+        p_signal_role: signalRole,
     });
 
     if (error) throw new Error(error.message);
@@ -114,6 +125,7 @@ export async function updateCategory(formData: FormData) {
     const name = readText(formData, "name");
     const sortOrder = readNumber(formData, "sort_order", 99);
     const trackingCurrency = readText(formData, "tracking_currency") || "INR";
+    const signalRole = readText(formData, "signal_role") || "other";
 
     if (!categoryId) {
         throw new Error("Category ID is required.");
@@ -121,13 +133,15 @@ export async function updateCategory(formData: FormData) {
 
     validateCategoryName(name);
     if (!["INR", "USD"].includes(trackingCurrency)) throw new Error("Tracking currency must be INR or USD.");
+    validateSignalRole(signalRole);
     await assertCategoryBelongsToUser(supabase, userId, categoryId);
 
-    const { error } = await supabase.rpc("update_asset_category", {
+    const { error } = await supabase.rpc("update_asset_category_v2", {
         p_category_id: categoryId,
         p_name: name,
         p_sort_order: sortOrder,
         p_tracking_currency: trackingCurrency,
+        p_signal_role: signalRole,
     });
 
     if (error) {

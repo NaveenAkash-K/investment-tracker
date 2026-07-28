@@ -22,6 +22,7 @@ type Category = {
     name: string;
     sort_order: number | null;
     tracking_currency: string | null;
+    signal_role: string | null;
 };
 
 type Target = {
@@ -66,7 +67,7 @@ export default async function SettingsPage() {
 
         supabase
             .from("asset_categories")
-            .select("id, name, sort_order, tracking_currency")
+            .select("id, name, sort_order, tracking_currency, signal_role")
             .eq("user_id", user.id)
             .order("sort_order", { ascending: true }),
 
@@ -336,12 +337,19 @@ export default async function SettingsPage() {
                         </p>
                     </div>
 
-                    <form action={addCategory} className="mt-5 grid gap-4 md:grid-cols-5">
+                    <form action={addCategory} className="mt-5 grid gap-4 md:grid-cols-6">
                         <div>
                             <Label htmlFor="category_tracking_currency">Tracking currency</Label>
                             <select id="category_tracking_currency" name="tracking_currency" defaultValue="INR" className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-950 outline-none focus:ring-2 focus:ring-slate-300">
                                 <option value="INR">INR</option>
                                 <option value="USD">USD</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <Label htmlFor="category_signal_role">Investment role</Label>
+                            <select id="category_signal_role" name="signal_role" defaultValue="other" className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-950 outline-none focus:ring-2 focus:ring-slate-300">
+                                <SignalRoleOptions />
                             </select>
                         </div>
 
@@ -387,7 +395,7 @@ export default async function SettingsPage() {
                     </form>
 
                     <div className="mt-6 overflow-x-auto">
-                        <table className="w-full min-w-[850px] text-left text-sm">
+                        <table className="w-full min-w-[1000px] text-left text-sm">
                             <caption className="sr-only">Asset category names, currencies, targets, and linked record counts</caption>
                             <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                             <tr>
@@ -395,6 +403,7 @@ export default async function SettingsPage() {
                                 <th className="px-4 py-3 text-right">Sort order</th>
                                 <th className="px-4 py-3 text-right">Target %</th>
                                 <th className="px-4 py-3">Currency</th>
+                                <th className="px-4 py-3">Investment role</th>
                                 <th className="px-4 py-3 text-right">Holdings</th>
                                 <th className="px-4 py-3 text-right">SIPs</th>
                                 <th className="px-4 py-3">Actions</th>
@@ -452,6 +461,12 @@ export default async function SettingsPage() {
                                             </select>
                                         </td>
 
+                                        <td className="px-4 py-4">
+                                            <select form={`update-category-${category.id}`} name="signal_role" defaultValue={category.signal_role ?? "other"} className="w-full min-w-36 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300">
+                                                <SignalRoleOptions />
+                                            </select>
+                                        </td>
+
                                         <td className="px-4 py-4 text-right">{holdingsCount}</td>
                                         <td className="px-4 py-4 text-right">{sipCount}</td>
 
@@ -493,7 +508,7 @@ export default async function SettingsPage() {
                             {categories.length === 0 && (
                                 <tr>
                                     <td
-                                        colSpan={7}
+                                        colSpan={8}
                                         className="px-4 py-10 text-center text-slate-500"
                                     >
                                         No categories found.
@@ -606,4 +621,16 @@ function InfoBox({
             <p className="mt-2 text-sm leading-6 text-slate-600">{text}</p>
         </div>
     );
+}
+
+function SignalRoleOptions() {
+    return <>
+        <option value="india_equity">India equity</option>
+        <option value="global_equity">Global equity</option>
+        <option value="debt">Debt / liquid</option>
+        <option value="gold">Gold / silver</option>
+        <option value="crypto">Crypto</option>
+        <option value="cash">Cash</option>
+        <option value="other">Other</option>
+    </>;
 }

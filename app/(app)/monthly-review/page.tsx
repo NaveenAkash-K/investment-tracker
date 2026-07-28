@@ -4,9 +4,11 @@ import { createClient } from "@/lib/supabase/server";
 import { PageHeader } from "@/components/page-header";
 import { StatusBanner } from "@/components/status-banner";
 import { MonthlyReviewForm, type MonthlyReviewFormRow } from "@/components/monthly-review-form";
+import { isUsableMonthlySignalRun } from "@/lib/analyzer-contract";
 import {
     buildMonthlyPortfolioReturns,
     calculateLinkedReturn,
+    getIndiaMonthKey,
     getIndiaMonthStart,
     type TrackingCurrency,
 } from "@/lib/performance";
@@ -39,14 +41,24 @@ export default async function MonthlyReviewPage({ searchParams }: { searchParams
     }
 
     const suggestedByCategoryName = new Map<string, number>();
-    const { data: latestSignalRun } = await supabase
+    const { data: monthlySignalRuns } = await supabase
         .from("market_signal_runs")
-        .select("id")
+        .select("id, as_of, status, contract_version, publication_status")
         .eq("user_id", user.id)
         .eq("run_type", "monthly")
         .order("as_of", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+        .limit(12);
+    const currentMonthSignalRun = (monthlySignalRuns ?? []).find(
+        (run) => getIndiaMonthKey(run.as_of) === month.slice(0, 7)
+    );
+    const latestSignalRun = currentMonthSignalRun && isUsableMonthlySignalRun({
+        monthKey: getIndiaMonthKey(currentMonthSignalRun.as_of),
+        status: currentMonthSignalRun.status,
+        contractVersion: currentMonthSignalRun.contract_version,
+        publicationStatus: currentMonthSignalRun.publication_status,
+    }, month.slice(0, 7))
+        ? currentMonthSignalRun
+        : undefined;
     if (latestSignalRun?.id) {
         const { data: recommendations } = await supabase
             .from("sip_signal_recommendations")
@@ -138,6 +150,12 @@ export default async function MonthlyReviewPage({ searchParams }: { searchParams
         <main><div className="mx-auto max-w-6xl px-4 py-8">
             <PageHeader title="Monthly Review" description="Record actual contributions once a month and separate real market movement from USD/INR currency movement." />
             <StatusBanner success={params.success} error={params.error} />
+            {!latestSignalRun ? (
+                <section role="status" className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                    <p className="font-semibold">No valid Market Intelligence recommendation for this month</p>
+                    <p className="mt-1">Suggested SIP amounts are hidden until a successful, published run with a supported analyzer contract is available. Your planned SIP and actual contribution fields are unaffected.</p>
+                </section>
+            ) : null}
             {currencyMismatches.length > 0 ? (
                 <section role="alert" className="mb-6 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
                     <p className="font-semibold">Fix holding currencies before saving this review</p>

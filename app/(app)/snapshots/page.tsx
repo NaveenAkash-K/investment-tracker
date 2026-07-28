@@ -15,6 +15,7 @@ type PortfolioSnapshot = {
     market_gain_inr: number | string | null;
     currency_gain_inr: number | string | null;
     combined_gain_inr: number | string | null;
+    monthly_review_status: "complete" | "acknowledged_missing" | "legacy_unknown";
     note_title: string | null;
     note_content: string | null;
     created_at: string | null;
@@ -128,12 +129,13 @@ export default async function SnapshotsPage() {
         redirect("/auth/login");
     }
 
-    const [snapshotsResult, snapshotCategoriesResult, snapshotSipsResult] =
+    const currentMonth = getIndiaMonthStart();
+    const [snapshotsResult, snapshotCategoriesResult, snapshotSipsResult, categoriesResult, currentReviewResult] =
         await Promise.all([
             supabase
                 .from("portfolio_snapshots")
                 .select(
-                    "id, snapshot_month, total_value_inr, total_monthly_sip, total_contribution_inr, market_gain_inr, currency_gain_inr, combined_gain_inr, note_title, note_content, created_at"
+                    "id, snapshot_month, total_value_inr, total_monthly_sip, total_contribution_inr, market_gain_inr, currency_gain_inr, combined_gain_inr, monthly_review_status, note_title, note_content, created_at"
                 )
                 .eq("user_id", user.id)
                 .order("snapshot_month", { ascending: false }),
@@ -149,12 +151,23 @@ export default async function SnapshotsPage() {
                 .from("snapshot_sips")
                 .select("id, snapshot_id, category_name, name, monthly_amount")
                 .eq("user_id", user.id),
+            supabase
+                .from("asset_categories")
+                .select("id")
+                .eq("user_id", user.id),
+            supabase
+                .from("monthly_category_performance")
+                .select("category_id")
+                .eq("user_id", user.id)
+                .eq("performance_month", currentMonth),
         ]);
 
     const queryError =
         snapshotsResult.error ||
         snapshotCategoriesResult.error ||
-        snapshotSipsResult.error;
+        snapshotSipsResult.error ||
+        categoriesResult.error ||
+        currentReviewResult.error;
 
     if (queryError) {
         return (
@@ -199,7 +212,10 @@ export default async function SnapshotsPage() {
     const previousSnapshot = snapshotsWithDetails[1] ?? null;
     const valueDelta = latestSnapshot && previousSnapshot
         ? toNumber(latestSnapshot.total_value_inr) - toNumber(previousSnapshot.total_value_inr) : 0;
-    const hasCurrentMonthSnapshot = snapshots.some((snapshot) => snapshot.snapshot_month.slice(0, 7) === getIndiaMonthStart().slice(0, 7));
+    const hasCurrentMonthSnapshot = snapshots.some((snapshot) => snapshot.snapshot_month.slice(0, 7) === currentMonth.slice(0, 7));
+    const currentReviewCategoryIds = new Set((currentReviewResult.data ?? []).map((row) => row.category_id));
+    const categoryCount = (categoriesResult.data ?? []).length;
+    const monthlyReviewComplete = categoryCount > 0 && currentReviewCategoryIds.size === categoryCount;
     const maxSnapshotValue = Math.max(...snapshotsWithDetails.map((snapshot) => toNumber(snapshot.total_value_inr)), 1);
     const previousDrift = new Map(previousSnapshot?.categories.map((category) => [category.category_name, toNumber(category.difference_percentage)]) ?? []);
 
@@ -287,8 +303,12 @@ export default async function SnapshotsPage() {
                 Current month snapshot already exists
               </span>
                         ) : (
-                            <form action={createCurrentMonthSnapshot}>
-                                <FormSubmitButton pendingLabel="Creating…" className="rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50">Create current month snapshot</FormSubmitButton>
+                            <form action={createCurrentMonthSnapshot} className="max-w-md space-y-3">
+                                {!monthlyReviewComplete ? <label className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+                                    <input type="checkbox" name="allow_without_review" required className="mt-0.5 h-4 w-4" />
+                                    <span><strong>Monthly Review is incomplete ({currentReviewCategoryIds.size}/{categoryCount} categories).</strong> I understand this snapshot will preserve holdings without complete contribution, market-growth and currency attribution.</span>
+                                </label> : null}
+                                <FormSubmitButton pendingLabel="Creating…" className="rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50">{monthlyReviewComplete ? "Create current month snapshot" : "Create acknowledged snapshot"}</FormSubmitButton>
                             </form>
                         )}
                     </div>
@@ -337,6 +357,7 @@ export default async function SnapshotsPage() {
                                                 <p className="mt-1 text-sm text-slate-500">
                                                     Created {formatDateTime(snapshot.created_at)}
                                                 </p>
+                                                {snapshot.monthly_review_status === "acknowledged_missing" ? <p className="mt-2 inline-flex rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800 ring-1 ring-amber-200">Created without complete Monthly Review</p> : snapshot.monthly_review_status === "complete" ? <p className="mt-2 inline-flex rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 ring-1 ring-emerald-200">Monthly Review complete</p> : <p className="mt-2 inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">Legacy snapshot · review status unknown</p>}
                                             </div>
 
                                             <div className="flex flex-wrap gap-3 sm:justify-end">

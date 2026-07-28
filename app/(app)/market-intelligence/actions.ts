@@ -21,11 +21,11 @@ export async function saveSignalDecision(formData: FormData) {
         redirect("/market-intelligence?error=Invalid+decision");
     }
 
-    const { error } = await supabase
-        .from("market_signal_runs")
-        .update({ decision_status: decisionStatus, decision_note: decisionNote || null })
-        .eq("id", runId)
-        .eq("user_id", user.id);
+    const { error } = await supabase.rpc("save_market_signal_decision", {
+        p_run_id: runId,
+        p_decision_status: decisionStatus,
+        p_decision_note: decisionNote || null,
+    });
 
     if (error) redirect(`/market-intelligence?error=${encodeURIComponent(error.message)}`);
     revalidatePath("/market-intelligence");
@@ -39,11 +39,9 @@ export async function acknowledgeSignalAlert(formData: FormData) {
     const alertId = text(formData, "alert_id");
     if (!alertId) redirect("/market-intelligence?error=Invalid+alert");
 
-    const { error } = await supabase
-        .from("market_signal_alerts")
-        .update({ acknowledged_at: new Date().toISOString() })
-        .eq("id", alertId)
-        .eq("user_id", user.id);
+    const { error } = await supabase.rpc("acknowledge_market_signal_alert", {
+        p_alert_id: alertId,
+    });
     if (error) redirect(`/market-intelligence?error=${encodeURIComponent(error.message)}`);
     revalidatePath("/market-intelligence");
     redirect("/market-intelligence?success=Alert+acknowledged");

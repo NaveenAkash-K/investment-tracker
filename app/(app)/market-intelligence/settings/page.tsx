@@ -10,7 +10,7 @@ type SearchParams = Promise<{ success?: string; error?: string }>;
 type Mapping = { market_key: string; exposure_weight: number | string };
 
 function mappingText(rows: Mapping[]) {
-    return rows.map((row) => `${row.market_key}:${(Number(row.exposure_weight) * 100).toFixed(0)}%`).join(", ");
+    return rows.map((row) => `${row.market_key}:${(Number(row.exposure_weight) * 100).toFixed(2)}%`).join(", ");
 }
 
 export default async function SignalMappingSettingsPage({ searchParams }: { searchParams: SearchParams }) {

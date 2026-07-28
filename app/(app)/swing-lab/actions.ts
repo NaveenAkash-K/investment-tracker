@@ -109,6 +109,21 @@ export async function updateSwingStop(formData: FormData) {
     }, "Protective stop updated.");
 }
 
+export async function reconcileSwingCorporateAction(formData: FormData) {
+    await execute(async () => {
+        const supabase = await authenticatedClient();
+        const { error } = await supabase.rpc("reconcile_swing_corporate_action", {
+            p_trade_id: required(formData, "trade_id"),
+            p_adjusted_entry_price: number(formData, "adjusted_entry_price"),
+            p_adjusted_quantity: integer(formData, "adjusted_quantity"),
+            p_adjusted_initial_stop: number(formData, "adjusted_initial_stop"),
+            p_adjusted_current_stop: number(formData, "adjusted_current_stop"),
+            p_note: text(formData, "notes") || null,
+        });
+        if (error) throw new Error(error.message);
+    }, "Corporate action reconciled. Automated monitoring can resume.");
+}
+
 export async function confirmSwingExit(formData: FormData) {
     await execute(async () => {
         const supabase = await authenticatedClient();

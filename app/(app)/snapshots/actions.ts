@@ -27,9 +27,11 @@ function readText(formData: FormData, key: string): string {
     return typeof value === "string" ? value.trim() : "";
 }
 
-export async function createCurrentMonthSnapshot() {
+export async function createCurrentMonthSnapshot(formData: FormData) {
     const { supabase } = await getSessionContext();
-    const { error } = await supabase.rpc("create_current_month_snapshot");
+    const { error } = await supabase.rpc("create_current_month_snapshot_v2", {
+        p_allow_without_review: formData.get("allow_without_review") === "on",
+    });
     if (error) throw new Error(error.message);
 
     revalidatePath("/snapshots");

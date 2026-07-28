@@ -389,3 +389,60 @@ export function getIndiaMonthStart(date = new Date()) {
     const parts = getIndiaDateParts(date);
     return `${parts.year}-${parts.month}-01`;
 }
+
+export function getIndiaMonthKey(value: Date | string = new Date()) {
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    const parts = getIndiaDateParts(date);
+    return `${parts.year}-${parts.month}`;
+}
+
+function getIndiaClockParts(date: Date) {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Kolkata",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+    }).formatToParts(date);
+    const values = new Map(parts.map((part) => [part.type, part.value]));
+    return {
+        dateKey: `${values.get("year") ?? "1970"}-${values.get("month") ?? "01"}-${values.get("day") ?? "01"}`,
+        minutes: Number(values.get("hour") ?? 0) * 60 + Number(values.get("minute") ?? 0),
+    };
+}
+
+function moveDate(dateKey: string, days: number) {
+    const value = new Date(`${dateKey}T00:00:00.000Z`);
+    value.setUTCDate(value.getUTCDate() + days);
+    return value;
+}
+
+export function getLatestExpectedDailyRunDate(
+    scheduledHour: number,
+    scheduledMinute: number,
+    graceMinutes: number,
+    now = new Date()
+) {
+    const local = getIndiaClockParts(now);
+    const deadline = scheduledHour * 60 + scheduledMinute + graceMinutes;
+    const expected = moveDate(local.dateKey, local.minutes >= deadline ? 0 : -1);
+    return expected.toISOString().slice(0, 10);
+}
+
+export function getLatestExpectedWeekdayRunDate(
+    scheduledHour: number,
+    scheduledMinute: number,
+    graceMinutes: number,
+    now = new Date()
+) {
+    const local = getIndiaClockParts(now);
+    const deadline = scheduledHour * 60 + scheduledMinute + graceMinutes;
+    const expected = moveDate(local.dateKey, local.minutes >= deadline ? 0 : -1);
+    while (expected.getUTCDay() === 0 || expected.getUTCDay() === 6) {
+        expected.setUTCDate(expected.getUTCDate() - 1);
+    }
+    return expected.toISOString().slice(0, 10);
+}

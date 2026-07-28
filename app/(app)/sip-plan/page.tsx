@@ -362,7 +362,7 @@ export default async function SipPlanPage() {
                                 name="monthly_amount"
                                 type="number"
                                 min="0"
-                                step="0.01"
+                                step="1"
                                 placeholder="6500"
                                 required
                             />
@@ -520,7 +520,7 @@ export default async function SipPlanPage() {
                                                     name={`monthly_amount_${sipPlan.id}`}
                                                     type="number"
                                                     min="0"
-                                                    step="0.01"
+                                                    step="1"
                                                     defaultValue={inputNumberValue(
                                                         sipPlan.monthly_amount,
                                                         2
@@ -662,7 +662,7 @@ export default async function SipPlanPage() {
                                                     name="monthly_amount"
                                                     type="number"
                                                     min="0"
-                                                    step="0.01"
+                                                    step="1"
                                                     defaultValue={inputNumberValue(
                                                         sipPlan.monthly_amount,
                                                         2
