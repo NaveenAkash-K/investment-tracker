@@ -8,9 +8,10 @@ import {
     isUsableMonthlySignalRun,
     isUsableSwingScan,
     LEGACY_ANALYZER_CONTRACT_VERSION,
+    PREVIOUS_ANALYZER_CONTRACT_VERSIONS,
 } from "../lib/analyzer-contract.ts";
 
-const contractBytes = readFileSync(new URL("../contracts/analyzer-tracker-contract.v1.json", import.meta.url));
+const contractBytes = readFileSync(new URL("../contracts/analyzer-tracker-contract.v2.json", import.meta.url));
 const contract = JSON.parse(contractBytes.toString("utf8")) as {
     contract_version: string;
     legacy_version: string;
@@ -20,7 +21,7 @@ const contract = JSON.parse(contractBytes.toString("utf8")) as {
 test("Tracker contract constants match the checked-in JSON contract", () => {
     assert.equal(
         createHash("sha256").update(contractBytes).digest("hex"),
-        "c6bc468b31bddfddeedee1a446fe0c60b0744d2976356b25b685282061928895"
+        "c8cb8511c0b2e56e2c16172a74932fc01395944c70473688a44ab6976af7fa46"
     );
     assert.equal(contract.contract_version, ANALYZER_CONTRACT_VERSION);
     assert.equal(contract.legacy_version, LEGACY_ANALYZER_CONTRACT_VERSION);
@@ -44,6 +45,7 @@ test("UI differentiates current, legacy and unsupported analyzer records", () =>
     assert.equal(getAnalyzerContractState(ANALYZER_CONTRACT_VERSION), "current");
     assert.equal(getAnalyzerContractState(null), "legacy");
     assert.equal(getAnalyzerContractState(LEGACY_ANALYZER_CONTRACT_VERSION), "legacy");
+    assert.equal(getAnalyzerContractState(PREVIOUS_ANALYZER_CONTRACT_VERSIONS[0]), "legacy");
     assert.equal(getAnalyzerContractState("future-v99"), "unsupported");
 });
 
@@ -99,4 +101,51 @@ test("entry RPC cannot bypass failed or stale swing scans", () => {
     assert.match(migration, /not v_latest_scan\.session_matches_expected/);
     assert.match(migration, /p_entry_date - v_latest_scan\.expected_price_session > 3/);
     assert.match(migration, /revoke all on function public\.confirm_swing_entry_review_v2/);
+});
+
+test("rereview migration stores truthful monitor coverage and idempotent deliveries", () => {
+    const migration = readFileSync(
+        new URL("../supabase/migrations/202607290001_rereview_fixes.sql", import.meta.url),
+        "utf8"
+    );
+    assert.match(migration, /candidates_requested integer not null/);
+    assert.match(migration, /candidates_evaluated integer not null/);
+    assert.match(migration, /failed_candidate_ids jsonb not null/);
+    assert.match(migration, /claim_analyzer_notification_delivery/);
+    assert.match(migration, /complete_analyzer_notification_delivery/);
+    assert.match(migration, /restore_complete_portfolio_backup_v7/);
+});
+
+test("second rereview migration enforces monitor truth and backward restore compatibility", () => {
+    const migration = readFileSync(
+        new URL("../supabase/migrations/202607300001_second_rereview_fixes.sql", import.meta.url),
+        "utf8"
+    );
+    const monitorSchema = contract.payloads.swing_monitor;
+    for (const field of [
+        "candidates_requested",
+        "positions_requested",
+        "candidates_evaluated",
+        "positions_evaluated",
+        "failed_candidate_ids",
+        "failed_trade_ids",
+    ]) {
+        assert.ok(monitorSchema.required.includes(field), `swing_monitor does not require ${field}`);
+    }
+    assert.match(migration, /2026-07-30\.v2/);
+    assert.match(migration, /evaluated counts cannot exceed requested counts/);
+    assert.match(migration, /requested, evaluated and failed counts do not reconcile/);
+    assert.match(migration, /not in \('2026-07-30\.v2', '2026-07-28\.v1', 'legacy-unversioned'\)/);
+    assert.match(migration, /value \|\| jsonb_build_object/);
+    assert.match(migration, /perform public\.restore_complete_portfolio_backup_v6\(v_compatible_backup\)/);
+    assert.match(migration, /resolve_analyzer_notification_delivery/);
+    assert.match(migration, /interval '15 minutes'/);
+});
+
+test("monthly comparison does not render a missing suggestion as zero", () => {
+    const page = readFileSync(
+        new URL("../app/(app)/market-intelligence/page.tsx", import.meta.url),
+        "utf8"
+    );
+    assert.match(page, /suggestedByCategory\.has\(category\) \? money\(.+\) : "Unavailable"/);
 });

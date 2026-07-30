@@ -18,7 +18,7 @@ export function AnalyzerContractStatus({ version, publisher }: { version: unknow
         <p className="mt-1">
             {state === "unsupported"
                 ? `This record uses contract ${String(version)} and is shown only for diagnosis. Update both projects before relying on it.`
-                : "This record predates the versioned Analyzer-to-Tracker contract. It remains visible as history, but its structure was not fully validated."}
+                : "This record predates the current Analyzer-to-Tracker contract. It remains visible as history, but newer integrity rules were not enforced when it was published."}
         </p>
     </div>;
 }

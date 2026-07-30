@@ -17,10 +17,10 @@ The Targets page includes a new-money allocation autopilot. It uses the entered 
 
 1. Install packages with `npm install`.
 2. Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` to `.env.local`.
-3. For a new Supabase project, apply every SQL file in `supabase/migrations` in filename order, starting with [the initial schema](supabase/migrations/202607190001_initial_schema.sql). For an existing installation, apply only migrations newer than the last one already run. The current final migration is [the partial-finding closure migration](supabase/migrations/202607280003_partial_finding_closure.sql).
+3. For a new Supabase project, apply every SQL file in `supabase/migrations` in filename order, starting with [the initial schema](supabase/migrations/202607190001_initial_schema.sql). For an existing installation, apply only migrations newer than the last one already run. The current final migration is [the second rereview fixes migration](supabase/migrations/202607300001_second_rereview_fixes.sql).
 4. Run `npm run dev` and open `http://localhost:3000`.
 
-Migrations are transactional. The latest hardening migration adds versioned Analyzer payload validation, read-only browser access to analyzer-authored tables, narrow user-transition RPCs, valuation-proxy provenance, explicit monthly-review snapshot state, auditable news rule evidence, and version-4 backup restoration.
+Migrations are transactional. The latest migration enforces reconciled Swing-monitor coverage, restores older monitor backups safely, and adds manual recovery for unresolved analyzer-email claims.
 
 ## Market Intelligence integration
 
@@ -32,13 +32,13 @@ The companion analyser in `D:\Projects\Personal\market-analyser` can read the tr
 4. Set `supabase.enabled` to `true` in the analyser config and run a preview before scheduling it.
 
 The service-role key must never be placed in `.env.local`, browser code or any public client bundle. Market recommendations remain advisory: Monthly Review records the actual amount invested and remains the source of truth.
-The integration uses the shared versioned contract in `contracts/analyzer-tracker-contract.v1.json`. Current payloads are validated in Python and Supabase; legacy records remain visible with a warning, while unknown versions are rejected. “Data coverage” describes input availability and freshness, not the probability of a correct recommendation. Market valuation columns are explicitly valuation proxies and include method, source and as-of date.
+The integration uses the shared versioned contract in `contracts/analyzer-tracker-contract.v2.json`. Current payloads are validated in Python and Supabase; legacy records remain visible with a warning, while unknown versions are rejected. “Data coverage” describes input availability and freshness, not the probability of a correct recommendation. Market valuation columns are explicitly valuation proxies and include method, source and as-of date.
 
 ## Swing Lab workflow
 
 Swing Lab is a separate risk budget and journal for end-of-day Indian-equity swing trades. It does not change long-term holdings, SIP allocations, or Monthly Review.
 
-1. Apply all migrations through the partial-finding closure migration. The 09:25 IST weekday monitor checks only existing candidates and positions; the 17:30 IST workflow calculates completed-session regime and candidates. The 08:00 IST portfolio workflow deliberately skips Swing Lab.
+1. Apply all migrations through the second rereview fixes migration. The 09:25 IST weekday monitor checks only existing candidates and positions; the 17:30 IST workflow calculates completed-session regime and candidates. The 08:00 IST portfolio workflow is a separate operation and cannot publish Swing results.
 2. Set trading capital, risk per trade, position limits, sector limit, and the minimum setup score in **Swing Lab → Risk controls**. Keep paper mode on while validating the process.
 3. A candidate is only a plan. Buy only after its entry trigger trades and never above the displayed maximum-entry price. Carried-forward candidates remain visible, but entry confirmation is disabled when the latest scan is failed, stale, unpublished, or unsupported.
 4. After an actual or paper fill, confirm its date, price, and quantity in Swing Lab. This is the only action that creates an open trade.

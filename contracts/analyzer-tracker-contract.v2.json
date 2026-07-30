@@ -1,15 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://personal-investment-tracker.local/contracts/analyzer-tracker/2026-07-28.v1",
+  "$id": "https://personal-investment-tracker.local/contracts/analyzer-tracker/2026-07-30.v2",
   "title": "Analyzer to Investment Tracker contract",
-  "contract_version": "2026-07-28.v1",
+  "contract_version": "2026-07-30.v2",
   "legacy_version": "legacy-unversioned",
   "payloads": {
     "market_run": {
       "type": "object",
       "required": ["contract_version", "run_id", "run_type", "as_of", "status", "model_version", "market_scores", "sip_recommendations", "global_recommendations", "alerts"],
       "properties": {
-        "contract_version": {"const": "2026-07-28.v1"},
+        "contract_version": {"const": "2026-07-30.v2"},
         "run_id": {"type": "string", "format": "uuid"},
         "run_type": {"enum": ["daily", "weekly", "monthly"]},
         "as_of": {"type": "string", "format": "date-time"},
@@ -26,7 +26,7 @@
       "type": "object",
       "required": ["contract_version", "scan_id", "as_of", "status", "model_version", "market_regime", "session_state", "session_matches_expected", "candidates"],
       "properties": {
-        "contract_version": {"const": "2026-07-28.v1"},
+        "contract_version": {"const": "2026-07-30.v2"},
         "scan_id": {"type": "string", "format": "uuid"},
         "as_of": {"type": "string", "format": "date-time"},
         "status": {"enum": ["successful", "partial", "failed", "no_session"]},
@@ -40,13 +40,19 @@
     },
     "swing_monitor": {
       "type": "object",
-      "required": ["contract_version", "monitor_id", "as_of", "status", "model_version", "candidate_updates", "position_updates", "notifications"],
+      "required": ["contract_version", "monitor_id", "as_of", "status", "model_version", "candidates_requested", "positions_requested", "candidates_evaluated", "positions_evaluated", "failed_candidate_ids", "failed_trade_ids", "candidate_updates", "position_updates", "notifications"],
       "properties": {
-        "contract_version": {"const": "2026-07-28.v1"},
+        "contract_version": {"const": "2026-07-30.v2"},
         "monitor_id": {"type": "string", "format": "uuid"},
         "as_of": {"type": "string", "format": "date-time"},
         "status": {"enum": ["successful", "partial", "failed", "disabled"]},
         "model_version": {"type": "string", "minLength": 1},
+        "candidates_requested": {"type": "integer", "minimum": 0},
+        "positions_requested": {"type": "integer", "minimum": 0},
+        "candidates_evaluated": {"type": "integer", "minimum": 0},
+        "positions_evaluated": {"type": "integer", "minimum": 0},
+        "failed_candidate_ids": {"type": "array", "items": {"type": "string"}},
+        "failed_trade_ids": {"type": "array", "items": {"type": "string"}},
         "candidate_updates": {"type": "array"},
         "position_updates": {"type": "array"},
         "notifications": {"type": "array"}
@@ -57,7 +63,7 @@
       "type": "object",
       "required": ["contract_version", "run_id", "as_of", "status", "model_version", "sources", "articles", "events", "alerts"],
       "properties": {
-        "contract_version": {"const": "2026-07-28.v1"},
+        "contract_version": {"const": "2026-07-30.v2"},
         "run_id": {"type": "string", "format": "uuid"},
         "as_of": {"type": "string", "format": "date-time"},
         "status": {"enum": ["successful", "partial", "failed"]},

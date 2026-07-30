@@ -1,11 +1,18 @@
-export const ANALYZER_CONTRACT_VERSION = "2026-07-28.v1" as const;
+export const ANALYZER_CONTRACT_VERSION = "2026-07-30.v2" as const;
 export const LEGACY_ANALYZER_CONTRACT_VERSION = "legacy-unversioned" as const;
+export const PREVIOUS_ANALYZER_CONTRACT_VERSIONS = ["2026-07-28.v1"] as const;
 
 export type AnalyzerContractState = "current" | "legacy" | "unsupported";
 
 export function getAnalyzerContractState(version: unknown): AnalyzerContractState {
     if (version === ANALYZER_CONTRACT_VERSION) return "current";
-    if (version === null || version === undefined || version === "" || version === LEGACY_ANALYZER_CONTRACT_VERSION) {
+    if (
+        version === null
+        || version === undefined
+        || version === ""
+        || version === LEGACY_ANALYZER_CONTRACT_VERSION
+        || PREVIOUS_ANALYZER_CONTRACT_VERSIONS.includes(version as "2026-07-28.v1")
+    ) {
         return "legacy";
     }
     return "unsupported";

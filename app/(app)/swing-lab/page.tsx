@@ -6,6 +6,7 @@ import { StatusBanner } from "@/components/status-banner";
 import { FormSubmitButton } from "@/components/form-submit-button";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { AnalyzerContractStatus } from "@/components/analyzer-contract-status";
+import { AnalyzerDeliveryAlerts, type AnalyzerDelivery } from "@/components/analyzer-delivery-alerts";
 import { isUsableSwingScan } from "@/lib/analyzer-contract";
 import { calculateSwingPerformance, calculateSwingQuantity } from "@/lib/swing";
 import { getIndiaDate, getLatestExpectedWeekdayRunDate } from "@/lib/performance";
@@ -17,6 +18,7 @@ import {
     skipSwingCandidate,
     updateSwingStop,
 } from "./actions";
+import { resolveAnalyzerDelivery } from "../analyzer-deliveries/actions";
 
 type SearchParams = Promise<{ success?: string; error?: string }>;
 type Settings = {
@@ -65,7 +67,10 @@ type Trade = {
 };
 type MonitorRun = {
     id: string; as_of: string; status: string; contract_version: string | null; price_observed_at: string | null;
+    candidates_requested: number; positions_requested: number;
+    candidates_evaluated: number; positions_evaluated: number;
     candidates_checked: number; positions_checked: number; notification_count: number;
+    failed_candidate_ids: unknown; failed_trade_ids: unknown; data_issues: unknown;
 };
 
 const defaults: Settings = {
@@ -152,22 +157,24 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) redirect("/auth/login");
 
-    const [settingsResult, scanResult, monitorResult, candidatesResult, tradesResult] = await Promise.all([
+    const [settingsResult, scanResult, monitorResult, candidatesResult, tradesResult, deliveriesResult] = await Promise.all([
         supabase.from("swing_lab_settings").select("trading_capital_inr, risk_per_trade_percentage, max_open_positions, max_sector_positions, minimum_setup_score, paper_mode").eq("user_id", user.id).maybeSingle(),
         supabase.from("swing_scan_runs").select("id, as_of, status, model_version, contract_version, publication_status, market_regime, raw_market_regime, regime_confirmed, regime_reason, regime_confirmation_reason, benchmark_symbol, benchmark_close, benchmark_sma50, benchmark_sma200, benchmark_distance_200_percentage, benchmark_price_date, expected_price_session, session_matches_expected, session_state, breadth_percentage, breadth_available, breadth_coverage_percentage, universe_size, eligible_size, published_size, effective_minimum_score, effective_risk_percentage, scan_blocked_reason, gate_counts, data_issues").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
-        supabase.from("swing_monitor_runs").select("id, as_of, status, contract_version, price_observed_at, candidates_checked, positions_checked, notification_count").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
+        supabase.from("swing_monitor_runs").select("id, as_of, status, contract_version, price_observed_at, candidates_requested, positions_requested, candidates_evaluated, positions_evaluated, candidates_checked, positions_checked, notification_count, failed_candidate_ids, failed_trade_ids, data_issues").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
         supabase.from("swing_candidates").select("id, scan_id, signal_key, symbol, company_name, sector, setup_type, status, setup_score, setup_as_of, expires_on, market_regime, close_price, entry_trigger, maximum_entry, initial_stop, atr, risk_per_share, suggested_quantity, suggested_risk_inr, last_price, last_price_as_of, score_components, reasons, invalidation_reason").eq("user_id", user.id).order("setup_as_of", { ascending: false }).limit(100),
         supabase.from("swing_trades").select("id, candidate_id, symbol, company_name, sector, trade_mode, status, signal_entry, maximum_entry, entry_date, entry_price, quantity, initial_stop, current_stop, initial_risk_per_share, planned_risk_inr, current_price, current_price_as_of, highest_close, unrealized_pnl_inr, unrealized_r_multiple, exit_signal_reason, exit_signal_at, exit_date, exit_price, fees_inr, realized_pnl_inr, realized_r_multiple, notes, corporate_action_review_required, corporate_action_reason").eq("user_id", user.id).order("entry_date", { ascending: false }).limit(200),
+        supabase.from("analyzer_notification_deliveries").select("id, delivery_key, channel, status, attempt_count, claimed_at, last_attempt_at, error_message").eq("user_id", user.id).in("channel", ["swing-eod", "swing-monitor"]).in("status", ["claimed", "uncertain"]).order("claimed_at", { ascending: false }).limit(20),
     ]);
     const params = await searchParams;
-    const queryError = settingsResult.error || scanResult.error || monitorResult.error || candidatesResult.error || tradesResult.error;
+    const queryError = settingsResult.error || scanResult.error || monitorResult.error || candidatesResult.error || tradesResult.error || deliveriesResult.error;
     if (queryError) {
-        return <main className="mx-auto max-w-5xl px-4 py-8"><div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-800"><h1 className="font-semibold">Swing Lab migration required</h1><p className="mt-2 text-sm">{queryError.message}</p><p className="mt-2 text-xs">Apply the pending Supabase migrations through <code>202607280001_review_correctness.sql</code>, then reload this page.</p></div></main>;
+        return <main className="mx-auto max-w-5xl px-4 py-8"><div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-800"><h1 className="font-semibold">Swing Lab migration required</h1><p className="mt-2 text-sm">{queryError.message}</p><p className="mt-2 text-xs">Apply all pending Supabase migrations, including <code>202607300001_second_rereview_fixes.sql</code>, then reload this page.</p></div></main>;
     }
 
     const settings = (settingsResult.data ?? defaults) as Settings;
     const latestScan = scanResult.data as Scan | null;
     const latestMonitor = monitorResult.data as MonitorRun | null;
+    const deliveryRows = (deliveriesResult.data ?? []) as AnalyzerDelivery[];
     const candidates = (candidatesResult.data ?? []) as Candidate[];
     const trades = (tradesResult.data ?? []) as Trade[];
     const now = new Date();
@@ -188,6 +195,11 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
         exitDate: trade.exit_date,
     })));
     const scanIssues = issueList(latestScan?.data_issues);
+    const monitorIssues = issueList(latestMonitor?.data_issues);
+    const failedMonitorRecords = [
+        ...stringList(latestMonitor?.failed_candidate_ids).map((id) => `Candidate ${id}`),
+        ...stringList(latestMonitor?.failed_trade_ids).map((id) => `Trade ${id}`),
+    ];
     const gateEntries = Object.entries(numberRecord(latestScan?.gate_counts)).filter(([, count]) => count > 0);
     const slotCapital = num(settings.trading_capital_inr) / Math.max(settings.max_open_positions, 1);
     const riskBudget = num(settings.trading_capital_inr) * num(settings.risk_per_trade_percentage) / 100;
@@ -216,10 +228,11 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
     return <main><div className="mx-auto max-w-7xl px-4 py-8">
         <PageHeader title="Swing Lab" description="End-of-day Indian equity candidates, manually confirmed entries, protective stops, exit signals, and a separate swing-trade journal." />
         <StatusBanner success={params.success} error={params.error} />
+        <AnalyzerDeliveryAlerts deliveries={deliveryRows} returnTo="/swing-lab" resolveAction={resolveAnalyzerDelivery} />
         {latestScan ? <AnalyzerContractStatus version={latestScan.contract_version} publisher="Swing scan" /> : null}
         {latestMonitor ? <AnalyzerContractStatus version={latestMonitor.contract_version} publisher="Swing monitor" /> : null}
         {scanHeartbeatMissed ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900"><p className="font-semibold">End-of-day scan heartbeat is missing</p><p className="mt-1">No scan was published for the latest expected workflow date, {date(expectedScanDate)}. Check the GitHub Action and Tracker publication logs.</p></div> : latestScan?.status === "failed" ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">The latest end-of-day scan failed. Do not treat older candidates as newly validated.</div> : null}
-        {monitorHeartbeatMissed ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900"><p className="font-semibold">Morning monitor heartbeat is missing</p><p className="mt-1">No monitor was published for the latest expected workflow date, {date(expectedMonitorDate)}. Verify open positions directly with your broker until the job recovers.</p></div> : latestMonitor?.status === "failed" ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">The latest morning monitor failed. Stops and candidate triggers may not be current.</div> : null}
+        {monitorHeartbeatMissed ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900"><p className="font-semibold">Morning monitor heartbeat is missing</p><p className="mt-1">No monitor was published for the latest expected workflow date, {date(expectedMonitorDate)}. Verify open positions directly with your broker until the job recovers.</p></div> : latestMonitor?.status === "failed" ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">The latest morning monitor failed. No requested record could be evaluated from fresh data; verify candidates and stops with your broker.</div> : latestMonitor?.status === "partial" ? <div role="alert" className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">The latest morning monitor was partial. Only the explicitly evaluated records below received a fresh check.</div> : null}
 
         <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
             <Summary label="Trading capital" value={money(settings.trading_capital_inr)} helper={settings.paper_mode ? "Paper mode" : "Live mode"} />
@@ -262,7 +275,11 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
                 <div><h2 className="font-semibold">Morning monitor heartbeat</h2><p className="mt-1 text-sm text-slate-500">Confirms whether the scheduled candidate and protective-stop check actually published.</p></div>
                 {latestMonitor ? <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase ${latestMonitor.status === "successful" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-800"}`}>{latestMonitor.status}</span> : null}
             </div>
-            {latestMonitor ? <p className="mt-3 text-sm text-slate-600">Ran {dateTime(latestMonitor.as_of)} · price observed {dateTime(latestMonitor.price_observed_at)} · checked {latestMonitor.candidates_checked} candidates and {latestMonitor.positions_checked} positions · {latestMonitor.notification_count} actions.</p> : <p className="mt-3 text-sm text-slate-500">No morning-monitor run has been published since the heartbeat migration was applied.</p>}
+            {latestMonitor ? <>
+                <p className="mt-3 text-sm text-slate-600">Ran {dateTime(latestMonitor.as_of)} · price observed {dateTime(latestMonitor.price_observed_at)} · evaluated {latestMonitor.candidates_evaluated}/{latestMonitor.candidates_requested} candidates and {latestMonitor.positions_evaluated}/{latestMonitor.positions_requested} positions · {latestMonitor.notification_count} actions.</p>
+                {failedMonitorRecords.length ? <p className="mt-2 text-xs text-amber-800">Not evaluated: {failedMonitorRecords.join(", ")}.</p> : null}
+                {monitorIssues.length ? <ul className="mt-3 space-y-1 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">{monitorIssues.map((issue) => <li key={issue}>• {issue}</li>)}</ul> : null}
+            </> : <p className="mt-3 text-sm text-slate-500">No morning-monitor run has been published since the heartbeat migration was applied.</p>}
         </section>
 
         <section className="mt-6">
