@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { calculateSwingPerformance, calculateSwingQuantity } from "../lib/swing.ts";
+import { calculateSwingExecutionQuality, calculateSwingPerformance, calculateSwingQuantity } from "../lib/swing.ts";
 
 test("sizes a swing position by both risk and capital slot", () => {
     assert.equal(calculateSwingQuantity({
@@ -45,4 +45,28 @@ test("calculates swing journal performance and remaining open risk", () => {
     assert.equal(metrics.maximumDrawdownInr, 100);
     assert.equal(metrics.openRiskInr, 50);
     assert.equal(metrics.openCapitalInr, 1000);
+});
+
+test("calculates execution quality only from stored fills and exit signals", () => {
+    const result = calculateSwingExecutionQuality([{
+        tradeId: "trade-1",
+        signalEntry: 100,
+        maximumEntry: 105,
+        entryPrice: 102,
+        initialStop: 95,
+        quantity: 10,
+        plannedRiskInr: 50,
+        feesInr: 7,
+        exitSignalPrice: 112,
+        exitSignalStop: 110,
+        exitPrice: 109,
+    }]);
+
+    assert.equal(result.totalEntrySlippageInr, 20);
+    assert.equal(result.totalExitSlippageInr, 30);
+    assert.equal(result.totalRiskVarianceInr, 20);
+    assert.equal(result.totalStopGapInr, 10);
+    assert.equal(result.rows[0].entrySlippagePercentage, 2);
+    assert.equal(result.rows[0].maximumEntryRoomUsedPercentage, 40);
+    assert.equal(result.rows[0].feesInR, 0.1);
 });

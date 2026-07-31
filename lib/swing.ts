@@ -21,6 +21,42 @@ export type SwingPerformanceMetrics = {
     openCapitalInr: number;
 };
 
+export type SwingExecutionInput = {
+    tradeId: string;
+    signalEntry: number;
+    maximumEntry: number;
+    entryPrice: number;
+    initialStop: number;
+    quantity: number;
+    plannedRiskInr: number;
+    feesInr: number;
+    exitPrice?: number | null;
+    exitSignalPrice?: number | null;
+    exitSignalStop?: number | null;
+};
+
+export type SwingExecutionRow = {
+    tradeId: string;
+    entrySlippageInr: number;
+    entrySlippagePercentage: number | null;
+    maximumEntryRoomUsedPercentage: number | null;
+    actualInitialRiskInr: number;
+    riskVarianceInr: number;
+    feesInR: number | null;
+    exitSlippageInr: number | null;
+    stopGapInr: number | null;
+};
+
+export type SwingExecutionSummary = {
+    rows: SwingExecutionRow[];
+    totalEntrySlippageInr: number;
+    totalExitSlippageInr: number;
+    totalFeesInr: number;
+    totalRiskVarianceInr: number;
+    totalStopGapInr: number;
+    comparableExitCount: number;
+};
+
 function finiteNonNegative(value: number) {
     return Number.isFinite(value) && value >= 0;
 }
@@ -92,5 +128,51 @@ export function calculateSwingPerformance(
             0
         ),
         openCapitalInr: open.reduce((sum, trade) => sum + trade.entryPrice * trade.quantity, 0),
+    };
+}
+
+export function calculateSwingExecutionQuality(
+    trades: SwingExecutionInput[]
+): SwingExecutionSummary {
+    const rows = trades.map((trade): SwingExecutionRow => {
+        const actualRisk = Math.max(trade.entryPrice - trade.initialStop, 0) * trade.quantity;
+        const entrySlippagePerShare = trade.entryPrice - trade.signalEntry;
+        const entryRange = trade.maximumEntry - trade.signalEntry;
+        const exitSlippage = trade.exitPrice !== null
+            && trade.exitPrice !== undefined
+            && trade.exitSignalPrice !== null
+            && trade.exitSignalPrice !== undefined
+            ? (trade.exitSignalPrice - trade.exitPrice) * trade.quantity
+            : null;
+        const stopGap = trade.exitPrice !== null
+            && trade.exitPrice !== undefined
+            && trade.exitSignalStop !== null
+            && trade.exitSignalStop !== undefined
+            ? Math.max(trade.exitSignalStop - trade.exitPrice, 0) * trade.quantity
+            : null;
+        return {
+            tradeId: trade.tradeId,
+            entrySlippageInr: entrySlippagePerShare * trade.quantity,
+            entrySlippagePercentage: trade.signalEntry > 0
+                ? entrySlippagePerShare / trade.signalEntry * 100
+                : null,
+            maximumEntryRoomUsedPercentage: entryRange > 0
+                ? entrySlippagePerShare / entryRange * 100
+                : null,
+            actualInitialRiskInr: actualRisk,
+            riskVarianceInr: actualRisk - trade.plannedRiskInr,
+            feesInR: actualRisk > 0 ? trade.feesInr / actualRisk : null,
+            exitSlippageInr: exitSlippage,
+            stopGapInr: stopGap,
+        };
+    });
+    return {
+        rows,
+        totalEntrySlippageInr: rows.reduce((sum, row) => sum + row.entrySlippageInr, 0),
+        totalExitSlippageInr: rows.reduce((sum, row) => sum + (row.exitSlippageInr ?? 0), 0),
+        totalFeesInr: trades.reduce((sum, trade) => sum + trade.feesInr, 0),
+        totalRiskVarianceInr: rows.reduce((sum, row) => sum + row.riskVarianceInr, 0),
+        totalStopGapInr: rows.reduce((sum, row) => sum + (row.stopGapInr ?? 0), 0),
+        comparableExitCount: rows.filter((row) => row.exitSlippageInr !== null).length,
     };
 }

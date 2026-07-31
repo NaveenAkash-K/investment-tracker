@@ -8,7 +8,7 @@ import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 import { AnalyzerContractStatus } from "@/components/analyzer-contract-status";
 import { AnalyzerDeliveryAlerts, type AnalyzerDelivery } from "@/components/analyzer-delivery-alerts";
 import { isUsableSwingScan } from "@/lib/analyzer-contract";
-import { calculateSwingPerformance, calculateSwingQuantity } from "@/lib/swing";
+import { calculateSwingExecutionQuality, calculateSwingPerformance, calculateSwingQuantity } from "@/lib/swing";
 import { getIndiaDate, getLatestExpectedWeekdayRunDate } from "@/lib/performance";
 import {
     confirmSwingEntry,
@@ -71,6 +71,12 @@ type MonitorRun = {
     candidates_evaluated: number; positions_evaluated: number;
     candidates_checked: number; positions_checked: number; notification_count: number;
     failed_candidate_ids: unknown; failed_trade_ids: unknown; data_issues: unknown;
+};
+type TradeEvent = {
+    trade_id: string;
+    event_at: string;
+    price: number | string | null;
+    stop_price: number | string | null;
 };
 
 const defaults: Settings = {
@@ -157,16 +163,17 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) redirect("/auth/login");
 
-    const [settingsResult, scanResult, monitorResult, candidatesResult, tradesResult, deliveriesResult] = await Promise.all([
+    const [settingsResult, scanResult, monitorResult, candidatesResult, tradesResult, tradeEventsResult, deliveriesResult] = await Promise.all([
         supabase.from("swing_lab_settings").select("trading_capital_inr, risk_per_trade_percentage, max_open_positions, max_sector_positions, minimum_setup_score, paper_mode").eq("user_id", user.id).maybeSingle(),
         supabase.from("swing_scan_runs").select("id, as_of, status, model_version, contract_version, publication_status, market_regime, raw_market_regime, regime_confirmed, regime_reason, regime_confirmation_reason, benchmark_symbol, benchmark_close, benchmark_sma50, benchmark_sma200, benchmark_distance_200_percentage, benchmark_price_date, expected_price_session, session_matches_expected, session_state, breadth_percentage, breadth_available, breadth_coverage_percentage, universe_size, eligible_size, published_size, effective_minimum_score, effective_risk_percentage, scan_blocked_reason, gate_counts, data_issues").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
         supabase.from("swing_monitor_runs").select("id, as_of, status, contract_version, price_observed_at, candidates_requested, positions_requested, candidates_evaluated, positions_evaluated, candidates_checked, positions_checked, notification_count, failed_candidate_ids, failed_trade_ids, data_issues").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
         supabase.from("swing_candidates").select("id, scan_id, signal_key, symbol, company_name, sector, setup_type, status, setup_score, setup_as_of, expires_on, market_regime, close_price, entry_trigger, maximum_entry, initial_stop, atr, risk_per_share, suggested_quantity, suggested_risk_inr, last_price, last_price_as_of, score_components, reasons, invalidation_reason").eq("user_id", user.id).order("setup_as_of", { ascending: false }).limit(100),
         supabase.from("swing_trades").select("id, candidate_id, symbol, company_name, sector, trade_mode, status, signal_entry, maximum_entry, entry_date, entry_price, quantity, initial_stop, current_stop, initial_risk_per_share, planned_risk_inr, current_price, current_price_as_of, highest_close, unrealized_pnl_inr, unrealized_r_multiple, exit_signal_reason, exit_signal_at, exit_date, exit_price, fees_inr, realized_pnl_inr, realized_r_multiple, notes, corporate_action_review_required, corporate_action_reason").eq("user_id", user.id).order("entry_date", { ascending: false }).limit(200),
+        supabase.from("swing_trade_events").select("trade_id, event_at, price, stop_price").eq("user_id", user.id).eq("event_type", "exit_signaled").order("event_at", { ascending: false }).limit(500),
         supabase.from("analyzer_notification_deliveries").select("id, delivery_key, channel, status, attempt_count, claimed_at, last_attempt_at, error_message").eq("user_id", user.id).in("channel", ["swing-eod", "swing-monitor"]).in("status", ["claimed", "uncertain"]).order("claimed_at", { ascending: false }).limit(20),
     ]);
     const params = await searchParams;
-    const queryError = settingsResult.error || scanResult.error || monitorResult.error || candidatesResult.error || tradesResult.error || deliveriesResult.error;
+    const queryError = settingsResult.error || scanResult.error || monitorResult.error || candidatesResult.error || tradesResult.error || tradeEventsResult.error || deliveriesResult.error;
     if (queryError) {
         return <main className="mx-auto max-w-5xl px-4 py-8"><div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-800"><h1 className="font-semibold">Swing Lab migration required</h1><p className="mt-2 text-sm">{queryError.message}</p><p className="mt-2 text-xs">Apply all pending Supabase migrations, including <code>202607300001_second_rereview_fixes.sql</code>, then reload this page.</p></div></main>;
     }
@@ -177,6 +184,10 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
     const deliveryRows = (deliveriesResult.data ?? []) as AnalyzerDelivery[];
     const candidates = (candidatesResult.data ?? []) as Candidate[];
     const trades = (tradesResult.data ?? []) as Trade[];
+    const latestExitEventByTrade = new Map<string, TradeEvent>();
+    for (const event of (tradeEventsResult.data ?? []) as TradeEvent[]) {
+        if (!latestExitEventByTrade.has(event.trade_id)) latestExitEventByTrade.set(event.trade_id, event);
+    }
     const now = new Date();
     const currentIndiaDate = getIndiaDate(now);
     const activeCandidates = candidates
@@ -194,6 +205,23 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
         realizedRMultiple: trade.realized_r_multiple === null ? null : num(trade.realized_r_multiple),
         exitDate: trade.exit_date,
     })));
+    const execution = calculateSwingExecutionQuality(trades.map((trade) => {
+        const exitEvent = latestExitEventByTrade.get(trade.id);
+        return {
+            tradeId: trade.id,
+            signalEntry: num(trade.signal_entry),
+            maximumEntry: num(trade.maximum_entry),
+            entryPrice: num(trade.entry_price),
+            initialStop: num(trade.initial_stop),
+            quantity: trade.quantity,
+            plannedRiskInr: num(trade.planned_risk_inr),
+            feesInr: num(trade.fees_inr),
+            exitPrice: trade.exit_price === null ? null : num(trade.exit_price),
+            exitSignalPrice: exitEvent?.price === null || exitEvent?.price === undefined ? null : num(exitEvent.price),
+            exitSignalStop: exitEvent?.stop_price === null || exitEvent?.stop_price === undefined ? null : num(exitEvent.stop_price),
+        };
+    }));
+    const executionByTrade = new Map(execution.rows.map((row) => [row.tradeId, row]));
     const scanIssues = issueList(latestScan?.data_issues);
     const monitorIssues = issueList(latestMonitor?.data_issues);
     const failedMonitorRecords = [
@@ -299,6 +327,18 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
             {metrics.closedTrades > 0 ? <div className="grid gap-3 border-t border-slate-100 p-5 sm:grid-cols-2 lg:grid-cols-4"><SmallMetric label="Profit factor" value={metrics.profitFactor === null ? "N/A" : Number.isFinite(metrics.profitFactor) ? metrics.profitFactor.toFixed(2) : "∞"} /><SmallMetric label="Maximum drawdown" value={money(metrics.maximumDrawdownInr)} /><SmallMetric label="Winning trades" value={String(metrics.winningTrades)} /><SmallMetric label="Losing trades" value={String(metrics.losingTrades)} /></div> : null}
         </section>
 
+        <section className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <div className="border-b border-slate-100 px-5 py-4"><h2 className="text-lg font-semibold">Execution quality</h2><p className="mt-1 text-sm text-slate-500">Compares your confirmed fills with the signal, risk plan and recorded exit signal. Positive slippage is an execution cost; negative slippage is an improvement.</p></div>
+            {trades.length ? <>
+                <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-5"><SmallMetric label="Entry slippage" value={money(execution.totalEntrySlippageInr)} /><SmallMetric label="Exit slippage" value={execution.comparableExitCount ? money(execution.totalExitSlippageInr) : "Unavailable"} /><SmallMetric label="Fees" value={money(execution.totalFeesInr)} /><SmallMetric label="Risk above plan" value={money(execution.totalRiskVarianceInr)} /><SmallMetric label="Gap beyond stop" value={money(execution.totalStopGapInr)} /></div>
+                <div className="overflow-x-auto border-t border-slate-100"><table className="w-full min-w-[1040px] text-left text-sm"><caption className="sr-only">Swing execution quality by confirmed trade</caption><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-3">Stock</th><th className="px-5 py-3 text-right">Entry slippage</th><th className="px-5 py-3 text-right">Actual / planned risk</th><th className="px-5 py-3 text-right">Fees</th><th className="px-5 py-3 text-right">Exit slippage</th><th className="px-5 py-3 text-right">Stop gap</th></tr></thead><tbody className="divide-y divide-slate-100">{trades.slice(0, 30).map((trade) => {
+                    const row = executionByTrade.get(trade.id);
+                    if (!row) return null;
+                    return <tr key={trade.id}><td className="px-5 py-4"><p className="font-semibold">{trade.symbol}</p><p className="text-xs uppercase text-slate-400">{trade.trade_mode} · {trade.status.replace("_", " ")}</p></td><ExecutionToneCell value={row.entrySlippageInr} text={`${money(row.entrySlippageInr)} · ${row.entrySlippagePercentage?.toFixed(2) ?? "N/A"}%`} /><td className="px-5 py-4 text-right"><p>{money(row.actualInitialRiskInr)} / {money(trade.planned_risk_inr)}</p><p className={row.riskVarianceInr > 0 ? "text-xs text-red-600" : "text-xs text-emerald-600"}>{row.riskVarianceInr > 0 ? "+" : ""}{money(row.riskVarianceInr)}</p></td><td className="px-5 py-4 text-right"><p>{money(trade.fees_inr)}</p><p className="text-xs text-slate-400">{row.feesInR === null ? "R unavailable" : `${row.feesInR.toFixed(2)}R`}</p></td><ExecutionToneCell value={row.exitSlippageInr} text={row.exitSlippageInr === null ? "Unavailable" : money(row.exitSlippageInr)} /><ExecutionToneCell value={row.stopGapInr} text={row.stopGapInr === null ? "Unavailable" : money(row.stopGapInr)} /></tr>;
+                })}</tbody></table></div>
+            </> : <p className="p-5 text-sm text-slate-500">Execution metrics appear after you confirm a paper or live entry.</p>}
+        </section>
+
         {inactiveCandidates.length > 0 ? <details className="mt-6 rounded-xl border border-slate-200 bg-white p-5"><summary className="cursor-pointer font-semibold">Recently skipped, expired or invalidated candidates</summary><div className="mt-4 space-y-2">{inactiveCandidates.map((candidate) => <div key={candidate.id} className="flex flex-col gap-1 rounded-lg bg-slate-50 p-3 text-sm sm:flex-row sm:items-center sm:justify-between"><span><strong>{candidate.symbol}</strong> · {candidate.status}</span><span className="text-slate-500">{candidate.invalidation_reason ?? `Score ${num(candidate.setup_score).toFixed(0)}`}</span></div>)}</div></details> : null}
 
         <section className="mt-8 rounded-xl border border-slate-200 bg-white p-5">
@@ -383,4 +423,9 @@ function DateField({ name, label, value }: { name: string; label: string; value:
 
 function ToneCell({ value, text }: { value: number; text: string }) {
     return <td className={`px-5 py-4 text-right font-semibold ${value > 0 ? "text-emerald-700" : value < 0 ? "text-red-700" : "text-slate-600"}`}>{text}</td>;
+}
+
+function ExecutionToneCell({ value, text }: { value: number | null; text: string }) {
+    const tone = value === null || value === 0 ? "text-slate-500" : value > 0 ? "text-red-700" : "text-emerald-700";
+    return <td className={`px-5 py-4 text-right font-medium ${tone}`}>{text}</td>;
 }
