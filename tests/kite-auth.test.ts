@@ -40,12 +40,25 @@ test("broker ids are masked before display", () => {
     assert.equal(maskBrokerUserId(null), "Unavailable");
 });
 
-test("Batch 2 has a permanent read-only order guard", () => {
-    assert.equal(KITE_EXECUTION_PHASE, "read_only_reconciliation");
+test("Batch 3 has a permanent broker-order guard", () => {
+    assert.equal(KITE_EXECUTION_PHASE, "paper_auto_only");
     assert.throws(
         () => assertKiteOrderPlacementAllowed(),
         /order placement is unavailable/i,
     );
+});
+
+test("Paper Auto migration remains simulated, idempotent and service-role controlled", () => {
+    const migration = readFileSync(
+        new URL("../supabase/migrations/202608020003_swing_paper_auto.sql", import.meta.url),
+        "utf8",
+    );
+    assert.match(migration, /execution_source in \('manual', 'paper_auto', 'assisted_live', 'live_auto'\)/);
+    assert.match(migration, /unique \(user_id, event_key\)/);
+    assert.match(migration, /Paper Auto is not armed for new entries/);
+    assert.match(migration, /grant execute on function public\.publish_swing_paper_cycle\(uuid, jsonb\)\s+to service_role/);
+    assert.match(migration, /broker_order_placed', false/);
+    assert.doesNotMatch(migration, /insert into public\.swing_(?:order_intents|broker_orders|broker_fills|protective_orders)/);
 });
 
 test("Kite worker migration exposes only service-role read-only cycle functions", () => {

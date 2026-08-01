@@ -17,10 +17,10 @@ The Targets page includes a new-money allocation autopilot. It uses the entered 
 
 1. Install packages with `npm install`.
 2. Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` to `.env.local`.
-3. For a new Supabase project, apply every SQL file in `supabase/migrations` in filename order, starting with [the initial schema](supabase/migrations/202607190001_initial_schema.sql). For an existing installation, apply only migrations newer than the last one already run. The current final migration is [the Kite read-only worker foundation](supabase/migrations/202608020002_kite_readonly_worker.sql).
+3. For a new Supabase project, apply every SQL file in `supabase/migrations` in filename order, starting with [the initial schema](supabase/migrations/202607190001_initial_schema.sql). For an existing installation, apply only migrations newer than the last one already run. The current final migration is [the Swing Paper Auto foundation](supabase/migrations/202608020003_swing_paper_auto.sql).
 4. Run `npm run dev` and open `http://localhost:3000`.
 
-Migrations are transactional. The Kite migrations add the fail-closed Swing execution data model, isolate encrypted sessions from browser access, and support read-only static-IP worker health and position reconciliation without enabling broker orders.
+Migrations are transactional. The Kite migrations add the fail-closed Swing execution data model, isolate encrypted sessions from browser access, support read-only static-IP worker health and position reconciliation, and add simulated Paper Auto execution without enabling broker orders.
 
 ## Market Intelligence integration
 
@@ -41,7 +41,7 @@ Swing Lab is a separate risk budget and journal for end-of-day Indian-equity swi
 1. Apply all migrations through the second rereview fixes migration. The 09:25 IST weekday monitor checks only existing candidates and positions; the 17:30 IST workflow calculates completed-session regime and candidates. The 08:00 IST portfolio workflow is a separate operation and cannot publish Swing results.
 2. Set trading capital, risk per trade, position limits, sector limit, and the minimum setup score in **Swing Lab → Risk controls**. Keep paper mode on while validating the process.
 3. A candidate is only a plan. Buy only after its entry trigger trades and never above the displayed maximum-entry price. Carried-forward candidates remain visible, but entry confirmation is disabled when the latest scan is failed, stale, unpublished, or unsupported.
-4. After an actual or paper fill, confirm its date, price, and quantity in Swing Lab. This is the only action that creates an open trade.
+4. In Advisory mode, confirm an actual or manual paper fill in Swing Lab. When Paper Auto is armed, a fresh Kite trigger crossing can create a simulated paper trade automatically.
 5. The daily analyser updates current price, raises trailing stops without lowering them, and flags exits. Confirm the actual exit fill in the app to close the journal entry.
 
 The scanner is long-only and uses the Nifty 200 universe, liquidity and trend gates, relative strength, a recent-breakout pullback, volatility-sized entries/stops, market breadth, sector caps, and portfolio-level risk limits. RED blocks new candidates. AMBER requires the higher score threshold, halves configured risk, and publishes at most one new candidate. Existing candidates and positions continue to be monitored in every regime. No qualified candidate is a normal result; the application never forces capital into a trade. Exchange holidays and provider-session mismatches cannot create new candidates. A detected split or bonus pauses the affected trade until broker-adjusted entry, quantity, and stop values are reconciled in the UI.
@@ -64,6 +64,15 @@ the latest static-IP worker heartbeat, read-only broker account snapshot, and
 live Swing position reconciliation. The VPS functions are executable only by
 the Supabase service role and accept `observe` mode only. A heartbeat older than
 ten minutes is shown as unavailable; it never inherits a previous healthy state.
+
+After applying `202608020003_swing_paper_auto.sql` and deploying the companion
+analyser's `kite_paper_worker.py` service, Swing Lab can be armed for the current
+NSE session. Paper Auto uses read-only full quotes, requires a newly observed
+upward trigger crossing after 09:20 IST, refuses stale quotes and chased entries,
+and simulates adverse slippage plus delivery charges. Pausing new entries does
+not stop protection of existing Paper Auto positions. All Paper Auto events are
+idempotent and included in full backup/restore; restore always returns the mode
+to Advisory. No broker order transport exists in this batch.
 
 ## News & Events workflow
 

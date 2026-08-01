@@ -71,6 +71,23 @@ export async function disconnectKiteAccount() {
     }, "The stored Kite session was removed. Swing automation remains advisory and disarmed.");
 }
 
+export async function configureSwingPaperAuto(formData: FormData) {
+    const action = required(formData, "action");
+    await execute(async () => {
+        const supabase = await authenticatedClient();
+        const { error } = await supabase.rpc("configure_swing_paper_auto", {
+            p_action: action,
+            p_slippage_bps: number(formData, "paper_slippage_bps"),
+            p_max_new_entries_per_day: integer(formData, "paper_max_new_entries_per_day"),
+        });
+        if (error) throw new Error(error.message);
+    }, action === "enable"
+        ? "Paper Auto is armed for today. It can create simulated trades only."
+        : action === "pause"
+            ? "New Paper Auto entries are paused. Existing simulated positions remain protected."
+            : "Swing Lab returned to Advisory mode. Existing simulated positions remain visible.");
+}
+
 export async function confirmSwingEntry(formData: FormData) {
     await execute(async () => {
         const supabase = await authenticatedClient();

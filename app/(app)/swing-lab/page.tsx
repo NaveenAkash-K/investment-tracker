@@ -15,6 +15,7 @@ import { maskBrokerUserId } from "@/lib/kite/session";
 import {
     confirmSwingEntry,
     confirmSwingExit,
+    configureSwingPaperAuto,
     disconnectKiteAccount,
     reconcileSwingCorporateAction,
     saveSwingSettings,
@@ -67,6 +68,9 @@ type Trade = {
     fees_inr: number | string; realized_pnl_inr: number | string | null;
     realized_r_multiple: number | string | null; notes: string | null;
     corporate_action_review_required: boolean; corporate_action_reason: string | null;
+    execution_source: "manual" | "paper_auto" | "assisted_live" | "live_auto";
+    entry_slippage_inr: number | string; exit_slippage_inr: number | string;
+    execution_cost_model: string | null; last_quote_at: string | null;
 };
 type MonitorRun = {
     id: string; as_of: string; status: string; contract_version: string | null; price_observed_at: string | null;
@@ -134,6 +138,24 @@ type KiteReconciliationRow = {
     broker_quantity: number | null;
     tracker_average_price: number | string | null;
     broker_average_price: number | string | null;
+};
+type AutomationControls = {
+    automation_mode: "advisory" | "paper_auto" | "assisted_live" | "live_auto";
+    new_entries_enabled: boolean;
+    armed_nse_session: string | null;
+    emergency_stop_active: boolean;
+    paper_slippage_bps: number | string;
+    paper_max_new_entries_per_day: number;
+};
+type PaperEvent = {
+    id: string;
+    event_type: "candidate_invalidated" | "entry_filled" | "entry_and_stop" | "stop_filled" | "signal_exit_filled" | "cycle_blocked";
+    symbol: string;
+    quantity: number | null;
+    price: number | string | null;
+    fees_inr: number | string;
+    reason: string;
+    observed_at: string;
 };
 
 const defaults: Settings = {
@@ -224,24 +246,27 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) redirect("/auth/login");
 
-    const [settingsResult, scanResult, monitorResult, candidatesResult, tradesResult, tradeEventsResult, deliveriesResult, kiteConnectionResult, kiteWorkerResult, kiteAccountResult, kiteReconciliationResult, kiteReconciliationRowsResult] = await Promise.all([
+    const [settingsResult, scanResult, monitorResult, candidatesResult, tradesResult, tradeEventsResult, deliveriesResult, kiteConnectionResult, kiteWorkerResult, kiteAccountResult, kiteReconciliationResult, kiteReconciliationRowsResult, automationResult, paperWorkerResult, paperEventsResult] = await Promise.all([
         supabase.from("swing_lab_settings").select("trading_capital_inr, risk_per_trade_percentage, max_open_positions, max_sector_positions, minimum_setup_score, paper_mode").eq("user_id", user.id).maybeSingle(),
         supabase.from("swing_scan_runs").select("id, as_of, status, model_version, contract_version, publication_status, market_regime, raw_market_regime, regime_confirmed, regime_reason, regime_confirmation_reason, benchmark_symbol, benchmark_close, benchmark_sma50, benchmark_sma200, benchmark_distance_200_percentage, benchmark_price_date, expected_price_session, session_matches_expected, session_state, breadth_percentage, breadth_available, breadth_coverage_percentage, universe_size, eligible_size, published_size, effective_minimum_score, effective_risk_percentage, scan_blocked_reason, gate_counts, data_issues").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
         supabase.from("swing_monitor_runs").select("id, as_of, status, contract_version, price_observed_at, candidates_requested, positions_requested, candidates_evaluated, positions_evaluated, candidates_checked, positions_checked, notification_count, failed_candidate_ids, failed_trade_ids, data_issues").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
         supabase.from("swing_candidates").select("id, scan_id, signal_key, symbol, company_name, sector, setup_type, status, setup_score, setup_as_of, expires_on, market_regime, close_price, entry_trigger, maximum_entry, initial_stop, atr, risk_per_share, suggested_quantity, suggested_risk_inr, last_price, last_price_as_of, score_components, reasons, invalidation_reason").eq("user_id", user.id).order("setup_as_of", { ascending: false }).limit(100),
-        supabase.from("swing_trades").select("id, candidate_id, symbol, company_name, sector, trade_mode, status, signal_entry, maximum_entry, entry_date, entry_price, quantity, initial_stop, current_stop, initial_risk_per_share, planned_risk_inr, current_price, current_price_as_of, highest_close, unrealized_pnl_inr, unrealized_r_multiple, exit_signal_reason, exit_signal_at, exit_date, exit_price, fees_inr, realized_pnl_inr, realized_r_multiple, notes, corporate_action_review_required, corporate_action_reason").eq("user_id", user.id).order("entry_date", { ascending: false }).limit(200),
+        supabase.from("swing_trades").select("id, candidate_id, symbol, company_name, sector, trade_mode, status, signal_entry, maximum_entry, entry_date, entry_price, quantity, initial_stop, current_stop, initial_risk_per_share, planned_risk_inr, current_price, current_price_as_of, highest_close, unrealized_pnl_inr, unrealized_r_multiple, exit_signal_reason, exit_signal_at, exit_date, exit_price, fees_inr, realized_pnl_inr, realized_r_multiple, notes, corporate_action_review_required, corporate_action_reason, execution_source, entry_slippage_inr, exit_slippage_inr, execution_cost_model, last_quote_at").eq("user_id", user.id).order("entry_date", { ascending: false }).limit(200),
         supabase.from("swing_trade_events").select("trade_id, event_at, price, stop_price").eq("user_id", user.id).eq("event_type", "exit_signaled").order("event_at", { ascending: false }).limit(500),
         supabase.from("analyzer_notification_deliveries").select("id, delivery_key, channel, status, attempt_count, claimed_at, last_attempt_at, error_message").eq("user_id", user.id).in("channel", ["swing-eod", "swing-monitor"]).in("status", ["claimed", "uncertain"]).order("claimed_at", { ascending: false }).limit(20),
         supabase.rpc("get_kite_connection_status"),
-        supabase.from("swing_worker_heartbeats").select("worker_id, worker_version, observed_public_ip, worker_status, execution_mode, kite_session_healthy, quote_stream_healthy, reconciliation_healthy, heartbeat_at, details").eq("user_id", user.id).order("heartbeat_at", { ascending: false }).limit(1).maybeSingle(),
+        supabase.from("swing_worker_heartbeats").select("worker_id, worker_version, observed_public_ip, worker_status, execution_mode, kite_session_healthy, quote_stream_healthy, reconciliation_healthy, heartbeat_at, details").eq("user_id", user.id).eq("execution_mode", "observe").order("heartbeat_at", { ascending: false }).limit(1).maybeSingle(),
         supabase.from("swing_broker_account_snapshots").select("observed_at, account_status, available_cash, utilised_debits, net_equity, holdings_count, positions_count, orders_count, trades_count").eq("user_id", user.id).order("observed_at", { ascending: false }).limit(1).maybeSingle(),
         supabase.from("swing_reconciliation_runs").select("id, reconciliation_status, tracker_positions, broker_positions, matched_positions, mismatch_positions, broker_only_positions, checked_at, details").eq("user_id", user.id).order("checked_at", { ascending: false }).limit(1).maybeSingle(),
         supabase.from("swing_position_reconciliations").select("reconciliation_run_id, symbol, reconciliation_status, tracker_quantity, broker_quantity, tracker_average_price, broker_average_price").eq("user_id", user.id).order("checked_at", { ascending: false }).limit(100),
+        supabase.from("swing_automation_controls").select("automation_mode, new_entries_enabled, armed_nse_session, emergency_stop_active, paper_slippage_bps, paper_max_new_entries_per_day").eq("user_id", user.id).maybeSingle(),
+        supabase.from("swing_worker_heartbeats").select("worker_id, worker_version, observed_public_ip, worker_status, execution_mode, kite_session_healthy, quote_stream_healthy, reconciliation_healthy, heartbeat_at, details").eq("user_id", user.id).eq("execution_mode", "paper_auto").order("heartbeat_at", { ascending: false }).limit(1).maybeSingle(),
+        supabase.from("swing_paper_events").select("id, event_type, symbol, quantity, price, fees_inr, reason, observed_at").eq("user_id", user.id).order("observed_at", { ascending: false }).limit(20),
     ]);
     const params = await searchParams;
-    const queryError = settingsResult.error || scanResult.error || monitorResult.error || candidatesResult.error || tradesResult.error || tradeEventsResult.error || deliveriesResult.error || kiteConnectionResult.error || kiteWorkerResult.error || kiteAccountResult.error || kiteReconciliationResult.error || kiteReconciliationRowsResult.error;
+    const queryError = settingsResult.error || scanResult.error || monitorResult.error || candidatesResult.error || tradesResult.error || tradeEventsResult.error || deliveriesResult.error || kiteConnectionResult.error || kiteWorkerResult.error || kiteAccountResult.error || kiteReconciliationResult.error || kiteReconciliationRowsResult.error || automationResult.error || paperWorkerResult.error || paperEventsResult.error;
     if (queryError) {
-        return <main className="mx-auto max-w-5xl px-4 py-8"><div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-800"><h1 className="font-semibold">Swing Lab migration required</h1><p className="mt-2 text-sm">{queryError.message}</p><p className="mt-2 text-xs">Apply all pending Supabase migrations through <code>202608020002_kite_readonly_worker.sql</code>, then reload this page.</p></div></main>;
+        return <main className="mx-auto max-w-5xl px-4 py-8"><div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-800"><h1 className="font-semibold">Swing Lab migration required</h1><p className="mt-2 text-sm">{queryError.message}</p><p className="mt-2 text-xs">Apply all pending Supabase migrations through <code>202608020003_swing_paper_auto.sql</code>, then reload this page.</p></div></main>;
     }
 
     const settings = (settingsResult.data ?? defaults) as Settings;
@@ -254,6 +279,13 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
     const kiteReconciliation = (kiteReconciliationResult.data ?? null) as KiteReconciliationRun | null;
     const kiteReconciliationRows = ((kiteReconciliationRowsResult.data ?? []) as KiteReconciliationRow[])
         .filter((row) => row.reconciliation_run_id === kiteReconciliation?.id);
+    const automation = (automationResult.data ?? {
+        automation_mode: "advisory", new_entries_enabled: false,
+        armed_nse_session: null, emergency_stop_active: false,
+        paper_slippage_bps: 5, paper_max_new_entries_per_day: 1,
+    }) as AutomationControls;
+    const paperWorker = (paperWorkerResult.data ?? null) as KiteWorkerHeartbeat | null;
+    const paperEvents = (paperEventsResult.data ?? []) as PaperEvent[];
     const kiteConfiguration = getKiteConfigurationState();
     const candidates = (candidatesResult.data ?? []) as Candidate[];
     const trades = (tradesResult.data ?? []) as Trade[];
@@ -267,7 +299,14 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
         && now.getTime() - new Date(kiteWorker.heartbeat_at).getTime() <= 10 * 60_000
         && (!kiteConnection?.connected_at || new Date(kiteWorker.heartbeat_at).getTime() >= new Date(kiteConnection.connected_at).getTime()),
     );
+    const paperWorkerFresh = Boolean(
+        paperWorker && now.getTime() - new Date(paperWorker.heartbeat_at).getTime() <= 10 * 60_000,
+    );
     const currentIndiaDate = getIndiaDate(now);
+    const paperAutoArmed = automation.automation_mode === "paper_auto"
+        && automation.new_entries_enabled
+        && automation.armed_nse_session === currentIndiaDate
+        && !automation.emergency_stop_active;
     const activeCandidates = candidates
         .filter((candidate) => ["candidate", "ready", "triggered"].includes(candidate.status) && candidate.expires_on >= currentIndiaDate)
         .sort((left, right) => (right.status === "triggered" ? 1 : 0) - (left.status === "triggered" ? 1 : 0) || num(right.setup_score) - num(left.setup_score));
@@ -332,12 +371,13 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
             : null;
 
     return <main><div className="mx-auto max-w-7xl px-4 py-8">
-        <PageHeader title="Swing Lab" description="End-of-day Indian equity candidates, manually confirmed entries, protective stops, exit signals, and a separate swing-trade journal." />
+        <PageHeader title="Swing Lab" description="End-of-day Indian equity candidates, manual trade tracking, and read-only Kite-powered Paper Auto simulation." />
         <StatusBanner success={params.success} error={params.error} />
         <AnalyzerDeliveryAlerts deliveries={deliveryRows} returnTo="/swing-lab" resolveAction={resolveAnalyzerDelivery} />
         {latestScan ? <AnalyzerContractStatus version={latestScan.contract_version} publisher="Swing scan" /> : null}
         {latestMonitor ? <AnalyzerContractStatus version={latestMonitor.contract_version} publisher="Swing monitor" /> : null}
         <KiteConnectionCard connection={kiteConnection} configured={kiteConfiguration.configured} worker={kiteWorker} workerFresh={kiteWorkerFresh} account={kiteAccount} reconciliation={kiteReconciliation} reconciliationRows={kiteReconciliationRows} />
+        <PaperAutoCard controls={automation} worker={paperWorker} workerFresh={paperWorkerFresh} events={paperEvents} kiteConnected={Boolean(kiteConfiguration.configured && kiteConnection?.connection_status === "connected" && kiteConnection.has_active_session)} today={currentIndiaDate} />
         {scanHeartbeatMissed ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900"><p className="font-semibold">End-of-day scan heartbeat is missing</p><p className="mt-1">No scan was published for the latest expected workflow date, {date(expectedScanDate)}. Check the GitHub Action and Tracker publication logs.</p></div> : latestScan?.status === "failed" ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">The latest end-of-day scan failed. Do not treat older candidates as newly validated.</div> : null}
         {monitorHeartbeatMissed ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900"><p className="font-semibold">Morning monitor heartbeat is missing</p><p className="mt-1">No monitor was published for the latest expected workflow date, {date(expectedMonitorDate)}. Verify open positions directly with your broker until the job recovers.</p></div> : latestMonitor?.status === "failed" ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">The latest morning monitor failed. No requested record could be evaluated from fresh data; verify candidates and stops with your broker.</div> : latestMonitor?.status === "partial" ? <div role="alert" className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">The latest morning monitor was partial. Only the explicitly evaluated records below received a fresh check.</div> : null}
 
@@ -351,7 +391,7 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
 
         <section className="mt-6 rounded-xl border border-slate-200 bg-white p-5">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div><h2 className="text-lg font-semibold">Latest end-of-day scan</h2><p className="mt-1 text-sm text-slate-500">Candidates are research priorities. A trade starts only after you confirm the actual fill.</p></div>
+                <div><h2 className="text-lg font-semibold">Latest end-of-day scan</h2><p className="mt-1 text-sm text-slate-500">Candidates are research priorities. Advisory mode waits for your confirmation; armed Paper Auto waits for an observed live trigger crossing.</p></div>
                 {latestScan ? <RegimeBadge regime={latestScan.market_regime} /> : null}
             </div>
             {latestScan ? <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
@@ -392,17 +432,18 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
         <section className="mt-6">
             <div className="flex items-end justify-between gap-4"><div><h2 className="text-xl font-semibold">{candidateEntryAllowed ? "Actionable candidates" : "Candidates for review"}</h2><p className="mt-1 text-sm text-slate-500">{candidateEntryAllowed ? "Review the conditional entry, maximum acceptable price, stop and expiry before acting." : "Older candidates remain visible for context, but entry confirmation is disabled until scan validity is restored."}</p></div><span className="text-sm text-slate-500">{activeCandidates.length} active</span></div>
             {candidateEntryBlockedReason ? <div role="alert" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><p className="font-semibold">New entries are temporarily disabled</p><p className="mt-1">{candidateEntryBlockedReason}</p></div> : null}
-            {activeCandidates.length ? <div className="mt-4 grid gap-4 xl:grid-cols-2">{activeCandidates.map((candidate) => <CandidateCard key={candidate.id} candidate={candidate} settings={settings} today={currentIndiaDate} entryAllowed={candidateEntryAllowed} entryBlockedReason={candidateEntryBlockedReason} carriedForward={Boolean(latestScan && candidate.scan_id !== latestScan.id)} />)}</div> : <div className="mt-4 rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">No active candidates. “No trade” is expected when the hard gates or setup quality are not satisfied.</div>}
+            {paperAutoArmed ? <div role="status" className="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900"><p className="font-semibold">Paper Auto is watching eligible candidates</p><p className="mt-1">Manual entry confirmation is disabled while armed to prevent duplicate tracking. No Kite order will be placed.</p></div> : null}
+            {activeCandidates.length ? <div className="mt-4 grid gap-4 xl:grid-cols-2">{activeCandidates.map((candidate) => <CandidateCard key={candidate.id} candidate={candidate} settings={settings} today={currentIndiaDate} entryAllowed={candidateEntryAllowed && !paperAutoArmed} entryBlockedReason={paperAutoArmed ? "Paper Auto is armed and watching this candidate for a fresh live trigger crossing." : candidateEntryBlockedReason} carriedForward={Boolean(latestScan && candidate.scan_id !== latestScan.id)} />)}</div> : <div className="mt-4 rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">No active candidates. “No trade” is expected when the hard gates or setup quality are not satisfied.</div>}
         </section>
 
         <section className="mt-8">
-            <div><h2 className="text-xl font-semibold">Open positions</h2><p className="mt-1 text-sm text-slate-500">Analyzer prices and stops are indicative until you confirm the real exit from your broker.</p></div>
+            <div><h2 className="text-xl font-semibold">Open positions</h2><p className="mt-1 text-sm text-slate-500">Manual records use your confirmed broker fills. Paper Auto records simulated live-quote fills and never sends an order.</p></div>
             {openTrades.length ? <div className="mt-4 grid gap-4 xl:grid-cols-2">{openTrades.map((trade) => <OpenTradeCard key={trade.id} trade={trade} today={currentIndiaDate} />)}</div> : <div className="mt-4 rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">No confirmed paper or live positions.</div>}
         </section>
 
         <section className="mt-8 overflow-hidden rounded-xl border border-slate-200 bg-white">
             <div className="border-b border-slate-100 px-5 py-4"><h2 className="text-lg font-semibold">Closed-trade journal</h2><p className="mt-1 text-sm text-slate-500">Use R-multiples and expectancy to judge the system after a meaningful sample, not one outcome.</p></div>
-            {closedTrades.length ? <div className="overflow-x-auto"><table className="w-full min-w-[900px] text-left text-sm"><caption className="sr-only">Closed swing trades and realized performance</caption><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-3">Stock</th><th className="px-5 py-3">Mode</th><th className="px-5 py-3">Entry / exit</th><th className="px-5 py-3 text-right">Quantity</th><th className="px-5 py-3 text-right">Realized P&L</th><th className="px-5 py-3 text-right">Result</th><th className="px-5 py-3">Exit date</th></tr></thead><tbody className="divide-y divide-slate-100">{closedTrades.map((trade) => <tr key={trade.id}><td className="px-5 py-4"><p className="font-semibold">{trade.symbol}</p><p className="text-xs text-slate-500">{trade.company_name}</p></td><td className="px-5 py-4 uppercase">{trade.trade_mode}</td><td className="px-5 py-4">{decimalMoney(trade.entry_price)} → {decimalMoney(trade.exit_price)}</td><td className="px-5 py-4 text-right">{trade.quantity}</td><ToneCell value={num(trade.realized_pnl_inr)} text={money(trade.realized_pnl_inr)} /><ToneCell value={num(trade.realized_r_multiple)} text={signed(trade.realized_r_multiple, "R")} /><td className="px-5 py-4">{date(trade.exit_date)}</td></tr>)}</tbody></table></div> : <p className="p-5 text-sm text-slate-500">Closed trades will appear here.</p>}
+            {closedTrades.length ? <div className="overflow-x-auto"><table className="w-full min-w-[900px] text-left text-sm"><caption className="sr-only">Closed swing trades and realized performance</caption><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-3">Stock</th><th className="px-5 py-3">Mode</th><th className="px-5 py-3">Entry / exit</th><th className="px-5 py-3 text-right">Quantity</th><th className="px-5 py-3 text-right">Realized P&L</th><th className="px-5 py-3 text-right">Result</th><th className="px-5 py-3">Exit date</th></tr></thead><tbody className="divide-y divide-slate-100">{closedTrades.map((trade) => <tr key={trade.id}><td className="px-5 py-4"><p className="font-semibold">{trade.symbol}</p><p className="text-xs text-slate-500">{trade.company_name}</p></td><td className="px-5 py-4 uppercase"><p>{trade.trade_mode}</p><p className="text-xs text-slate-400">{trade.execution_source.replaceAll("_", " ")}</p></td><td className="px-5 py-4">{decimalMoney(trade.entry_price)} → {decimalMoney(trade.exit_price)}</td><td className="px-5 py-4 text-right">{trade.quantity}</td><ToneCell value={num(trade.realized_pnl_inr)} text={money(trade.realized_pnl_inr)} /><ToneCell value={num(trade.realized_r_multiple)} text={signed(trade.realized_r_multiple, "R")} /><td className="px-5 py-4">{date(trade.exit_date)}</td></tr>)}</tbody></table></div> : <p className="p-5 text-sm text-slate-500">Closed trades will appear here.</p>}
             {metrics.closedTrades > 0 ? <div className="grid gap-3 border-t border-slate-100 p-5 sm:grid-cols-2 lg:grid-cols-4"><SmallMetric label="Profit factor" value={metrics.profitFactor === null ? "N/A" : Number.isFinite(metrics.profitFactor) ? metrics.profitFactor.toFixed(2) : "∞"} /><SmallMetric label="Maximum drawdown" value={money(metrics.maximumDrawdownInr)} /><SmallMetric label="Winning trades" value={String(metrics.winningTrades)} /><SmallMetric label="Losing trades" value={String(metrics.losingTrades)} /></div> : null}
         </section>
 
@@ -436,6 +477,74 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
             </form>
         </section>
     </div></main>;
+}
+
+function PaperAutoCard({ controls, worker, workerFresh, events, kiteConnected, today }: {
+    controls: AutomationControls;
+    worker: KiteWorkerHeartbeat | null;
+    workerFresh: boolean;
+    events: PaperEvent[];
+    kiteConnected: boolean;
+    today: string;
+}) {
+    const armed = controls.automation_mode === "paper_auto"
+        && controls.new_entries_enabled
+        && controls.armed_nse_session === today
+        && !controls.emergency_stop_active;
+    const paused = controls.automation_mode === "paper_auto" && !armed;
+    const workerReady = Boolean(workerFresh && worker?.worker_status === "healthy" && worker.kite_session_healthy);
+    const statusLabel = armed ? "Armed today" : paused ? "New entries paused" : "Advisory";
+    const tone = armed
+        ? "border-blue-200 bg-blue-50 text-blue-800"
+        : paused
+            ? "border-amber-200 bg-amber-50 text-amber-900"
+            : "border-slate-200 bg-slate-50 text-slate-700";
+
+    return <section className="mb-6 rounded-xl border border-slate-200 bg-white p-5" aria-labelledby="paper-auto-title">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="flex gap-3">
+                <div className="rounded-lg bg-violet-50 p-2 text-violet-700"><Activity className="h-5 w-5" /></div>
+                <div><h2 id="paper-auto-title" className="text-lg font-semibold">Paper Auto</h2><p className="mt-1 text-sm text-slate-500">Production Kite quotes, simulated fills, realistic costs and automated paper stops. Broker order execution remains impossible in Batch 3.</p></div>
+            </div>
+            <span role="status" className={`w-fit rounded-full border px-3 py-1 text-xs font-semibold uppercase ${tone}`}>{statusLabel}</span>
+        </div>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <SmallMetric label="Mode" value={statusLabel} />
+            <SmallMetric label="Armed session" value={date(controls.armed_nse_session)} />
+            <SmallMetric label="Paper worker" value={!worker ? "Not observed" : !workerFresh ? "Heartbeat stale" : worker.worker_status} />
+            <SmallMetric label="Live quotes" value={!workerFresh ? "Unavailable" : worker?.quote_stream_healthy ? "Fresh" : "Idle / unavailable"} />
+            <SmallMetric label="Broker orders" value="Blocked" />
+        </div>
+
+        {!kiteConnected ? <div role="alert" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><p className="font-semibold">Connect Kite before arming</p><p className="mt-1">Paper Auto uses the same daily encrypted Kite session. It cannot be enabled with a missing or expired session.</p></div> : null}
+        {controls.emergency_stop_active ? <div role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-900">The emergency stop is active. New Paper Auto entries are blocked.</div> : null}
+        {armed && !workerReady ? <div role="alert" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><p className="font-semibold">Armed, but worker readiness is not confirmed</p><p className="mt-1">No simulated entry can occur without a fresh Kite session and quote. Check the VPS service and its journal.</p></div> : null}
+
+        <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+            <p className="font-semibold">How a paper entry happens</p>
+            <p className="mt-1">After 09:20 IST the worker must first observe a price below the trigger and then a real upward crossing within the maximum entry. It never invents a fill from an already-crossed first observation. Pausing blocks new entries but keeps monitoring existing Paper Auto stops and pending exits.</p>
+        </div>
+
+        <form action={configureSwingPaperAuto} className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <input type="hidden" name="action" value="enable" />
+            <NumberField name="paper_slippage_bps" label="Adverse slippage (bps)" value={num(controls.paper_slippage_bps)} min={0} max={50} step={0.5} />
+            <NumberField name="paper_max_new_entries_per_day" label="Maximum new paper entries/day" value={controls.paper_max_new_entries_per_day} min={1} max={5} step={1} />
+            <div className="rounded-lg border border-slate-200 p-3 text-sm text-slate-600"><p className="font-medium text-slate-800">Cost model</p><p className="mt-1">NSE CNC statutory charges, DP charge and adverse fill slippage.</p></div>
+            <div className="flex items-end"><ConfirmSubmitButton confirmation="Arm Paper Auto for today's session? This can create simulated paper trades, but no broker orders." pendingText="Arming Paper Auto..." className="w-full bg-violet-700 text-white hover:bg-violet-800" disabled={!kiteConnected}>{armed ? "Save and re-arm today" : "Arm Paper Auto today"}</ConfirmSubmitButton></div>
+        </form>
+
+        <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
+            {controls.automation_mode === "paper_auto" ? <form action={configureSwingPaperAuto}><input type="hidden" name="action" value="pause" /><input type="hidden" name="paper_slippage_bps" value={num(controls.paper_slippage_bps)} /><input type="hidden" name="paper_max_new_entries_per_day" value={controls.paper_max_new_entries_per_day} /><ConfirmSubmitButton confirmation="Pause only new Paper Auto entries? Existing simulated positions will keep their stop and exit monitoring." pendingText="Pausing entries...">Pause new entries</ConfirmSubmitButton></form> : null}
+            {controls.automation_mode === "paper_auto" ? <form action={configureSwingPaperAuto}><input type="hidden" name="action" value="advisory" /><input type="hidden" name="paper_slippage_bps" value={num(controls.paper_slippage_bps)} /><input type="hidden" name="paper_max_new_entries_per_day" value={controls.paper_max_new_entries_per_day} /><ConfirmSubmitButton confirmation="Return new entries to manual Advisory mode? Existing paper records will remain in the journal." pendingText="Switching to Advisory...">Use Advisory mode</ConfirmSubmitButton></form> : null}
+            <p className="flex items-center gap-2 text-xs text-slate-500"><ShieldCheck className="h-4 w-4 text-emerald-600" />No broker order, leverage, short sale or automatic live trade path exists.</p>
+        </div>
+
+        <details className="mt-4 rounded-lg border border-slate-200 p-4">
+            <summary className="cursor-pointer text-sm font-semibold">Recent Paper Auto activity ({events.length})</summary>
+            {events.length ? <div className="mt-3 space-y-2">{events.map((event) => <div key={event.id} className="rounded-lg bg-slate-50 p-3 text-sm"><div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between"><p><strong>{event.symbol}</strong> · {event.event_type.replaceAll("_", " ")}</p><span className="text-xs text-slate-500">{dateTime(event.observed_at)}</span></div><p className="mt-1 text-slate-600">{event.reason}</p>{event.price !== null ? <p className="mt-1 text-xs text-slate-500">{event.quantity ? `${event.quantity} shares · ` : ""}{decimalMoney(event.price)} · estimated fees {decimalMoney(event.fees_inr)}</p> : null}</div>)}</div> : <p className="mt-3 text-sm text-slate-500">No material Paper Auto decision has been recorded yet.</p>}
+        </details>
+    </section>;
 }
 
 function KiteConnectionCard({ connection, configured, worker, workerFresh, account, reconciliation, reconciliationRows }: {
@@ -569,11 +678,11 @@ function OpenTradeCard({ trade, today }: { trade: Trade; today: string }) {
     const pnl = trade.unrealized_pnl_inr === null ? (current - num(trade.entry_price)) * trade.quantity : num(trade.unrealized_pnl_inr);
     const r = trade.unrealized_r_multiple === null ? pnl / Math.max(num(trade.planned_risk_inr), 0.01) : num(trade.unrealized_r_multiple);
     return <article className={`rounded-xl border bg-white p-5 ${corporateActionReview ? "border-amber-300 ring-1 ring-amber-100" : trade.status === "exit_pending" ? "border-red-300 ring-1 ring-red-100" : "border-slate-200"}`}>
-        <div className="flex items-start justify-between gap-4"><div><div className="flex flex-wrap items-center gap-2"><h3 className="text-lg font-bold">{trade.symbol}</h3><span className={`rounded-full px-2.5 py-1 text-xs font-semibold uppercase ${trade.status === "exit_pending" ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"}`}>{trade.status.replace("_", " ")}</span><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium uppercase text-slate-600">{trade.trade_mode}</span></div><p className="mt-1 text-sm text-slate-600">{trade.quantity} shares · entered {date(trade.entry_date)}</p></div><div className="text-right">{corporateActionReview ? <><p className="text-lg font-bold text-amber-700">Monitoring paused</p><p className="text-xs text-slate-500">P&L basis requires reconciliation</p></> : <><p className={`text-xl font-bold ${pnl > 0 ? "text-emerald-700" : pnl < 0 ? "text-red-700" : "text-slate-950"}`}>{money(pnl)}</p><p className="text-xs font-medium text-slate-500">{signed(r, "R")}</p></>}</div></div>
+        <div className="flex items-start justify-between gap-4"><div><div className="flex flex-wrap items-center gap-2"><h3 className="text-lg font-bold">{trade.symbol}</h3><span className={`rounded-full px-2.5 py-1 text-xs font-semibold uppercase ${trade.status === "exit_pending" ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"}`}>{trade.status.replace("_", " ")}</span><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium uppercase text-slate-600">{trade.trade_mode}</span>{trade.execution_source === "paper_auto" ? <span className="rounded-full bg-violet-50 px-2.5 py-1 text-xs font-medium uppercase text-violet-700">Paper Auto</span> : null}</div><p className="mt-1 text-sm text-slate-600">{trade.quantity} shares · entered {date(trade.entry_date)}</p></div><div className="text-right">{corporateActionReview ? <><p className="text-lg font-bold text-amber-700">Monitoring paused</p><p className="text-xs text-slate-500">P&L basis requires reconciliation</p></> : <><p className={`text-xl font-bold ${pnl > 0 ? "text-emerald-700" : pnl < 0 ? "text-red-700" : "text-slate-950"}`}>{money(pnl)}</p><p className="text-xs font-medium text-slate-500">{signed(r, "R")}</p></>}</div></div>
         {corporateActionReview ? <div role="alert" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><p className="font-semibold">Corporate action detected</p><p className="mt-1">{trade.corporate_action_reason ?? "Confirm the broker-adjusted quantity, entry and stop values before monitoring resumes."}</p></div> : null}
         {trade.status === "exit_pending" ? <div className="mt-4 flex gap-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><div><p className="font-semibold">Exit action pending</p><p>{trade.exit_signal_reason ?? "A strategy exit condition was reached."}</p></div></div> : null}
         <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4"><SmallMetric label="Entry" value={decimalMoney(trade.entry_price)} /><SmallMetric label="Current" value={decimalMoney(current)} /><SmallMetric label="Protective stop" value={decimalMoney(trade.current_stop)} /><SmallMetric label="Highest close" value={decimalMoney(trade.highest_close ?? trade.entry_price)} /></div>
-        <p className="mt-3 text-xs text-slate-400">Price as of {date(trade.current_price_as_of)}. A gap through the stop may fill below the displayed stop.</p>
+        <p className="mt-3 text-xs text-slate-400">Price as of {trade.execution_source === "paper_auto" ? dateTime(trade.last_quote_at) : date(trade.current_price_as_of)}. A gap through the stop may fill below the displayed stop.</p>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
             {corporateActionReview ? <details className="rounded-lg border border-amber-200 p-3" open><summary className="cursor-pointer text-sm font-semibold">Reconcile broker-adjusted values</summary><form action={reconcileSwingCorporateAction} className="mt-3 space-y-3"><input type="hidden" name="trade_id" value={trade.id} /><p className="text-xs text-amber-800">Enter the values shown by your broker after the split or bonus. Zero placeholders must be replaced.</p><NumberField name="adjusted_entry_price" label="Adjusted average entry" value={0} min={0.01} step={0.01} /><NumberField name="adjusted_quantity" label="Adjusted quantity" value={0} min={1} step={1} /><NumberField name="adjusted_initial_stop" label="Adjusted initial stop" value={0} min={0.01} step={0.01} /><NumberField name="adjusted_current_stop" label="Adjusted current stop" value={0} min={0.01} step={0.01} /><input name="notes" required placeholder="Broker action and adjustment ratio" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" /><ConfirmSubmitButton confirmation={`Resume ${trade.symbol} monitoring with these broker-adjusted values?`} pendingText="Reconciling...">Save reconciliation</ConfirmSubmitButton></form></details> : <details className="rounded-lg border border-slate-200 p-3"><summary className="cursor-pointer text-sm font-semibold">Raise stop manually</summary><form action={updateSwingStop} className="mt-3 space-y-3"><input type="hidden" name="trade_id" value={trade.id} /><NumberField name="new_stop" label="New stop" value={num(trade.current_stop)} min={num(trade.current_stop)} step={0.01} /><input name="reason" placeholder="Reason" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" /><FormSubmitButton pendingText="Updating stop...">Update stop</FormSubmitButton></form></details>}
             <details className="rounded-lg border border-slate-200 p-3" open={trade.status === "exit_pending"}><summary className="cursor-pointer text-sm font-semibold">Confirm actual exit</summary><form action={confirmSwingExit} className="mt-3 space-y-3"><input type="hidden" name="trade_id" value={trade.id} /><DateField name="exit_date" label="Exit date" value={today} /><NumberField name="exit_price" label="Actual exit price" value={current} min={0.01} step={0.01} /><NumberField name="fees_inr" label="Total trade fees" value={0} min={0} step={0.01} /><input name="notes" placeholder="Optional exit note" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" /><ConfirmSubmitButton confirmation={`Close ${trade.symbol} using this actual exit?`} pendingText="Closing trade..." className="w-full bg-red-600 text-white hover:bg-red-700">Confirm exit</ConfirmSubmitButton></form></details>
