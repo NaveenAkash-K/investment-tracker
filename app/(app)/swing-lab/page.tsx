@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { AlertTriangle, CheckCircle2, Clock3, KeyRound, ShieldCheck } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, Clock3, KeyRound, Server, ShieldCheck, WalletCards } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { PageHeader } from "@/components/page-header";
 import { StatusBanner } from "@/components/status-banner";
@@ -92,6 +92,49 @@ type KiteConnection = {
     error_message: string | null;
     has_active_session: boolean;
 };
+type KiteWorkerHeartbeat = {
+    worker_id: string;
+    worker_version: string;
+    observed_public_ip: string | null;
+    worker_status: "starting" | "healthy" | "degraded" | "blocked" | "stopping";
+    execution_mode: "observe" | "paper_auto" | "assisted_live" | "live_auto";
+    kite_session_healthy: boolean;
+    quote_stream_healthy: boolean;
+    reconciliation_healthy: boolean;
+    heartbeat_at: string;
+    details: unknown;
+};
+type KiteAccountSnapshot = {
+    observed_at: string;
+    account_status: "healthy" | "degraded" | "blocked" | "error";
+    available_cash: number | string | null;
+    utilised_debits: number | string | null;
+    net_equity: number | string | null;
+    holdings_count: number;
+    positions_count: number;
+    orders_count: number;
+    trades_count: number;
+};
+type KiteReconciliationRun = {
+    id: string;
+    reconciliation_status: "matched" | "mismatch" | "unavailable" | "error";
+    tracker_positions: number;
+    broker_positions: number;
+    matched_positions: number;
+    mismatch_positions: number;
+    broker_only_positions: number;
+    checked_at: string;
+    details: unknown;
+};
+type KiteReconciliationRow = {
+    reconciliation_run_id: string | null;
+    symbol: string;
+    reconciliation_status: "matched" | "mismatch" | "blocked" | "unavailable";
+    tracker_quantity: number | null;
+    broker_quantity: number | null;
+    tracker_average_price: number | string | null;
+    broker_average_price: number | string | null;
+};
 
 const defaults: Settings = {
     trading_capital_inr: 100000,
@@ -109,6 +152,10 @@ function num(value: unknown) {
 
 function money(value: unknown) {
     return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(num(value));
+}
+
+function optionalMoney(value: unknown) {
+    return value === null || value === undefined ? "Unavailable" : money(value);
 }
 
 function decimalMoney(value: unknown) {
@@ -177,7 +224,7 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) redirect("/auth/login");
 
-    const [settingsResult, scanResult, monitorResult, candidatesResult, tradesResult, tradeEventsResult, deliveriesResult, kiteConnectionResult] = await Promise.all([
+    const [settingsResult, scanResult, monitorResult, candidatesResult, tradesResult, tradeEventsResult, deliveriesResult, kiteConnectionResult, kiteWorkerResult, kiteAccountResult, kiteReconciliationResult, kiteReconciliationRowsResult] = await Promise.all([
         supabase.from("swing_lab_settings").select("trading_capital_inr, risk_per_trade_percentage, max_open_positions, max_sector_positions, minimum_setup_score, paper_mode").eq("user_id", user.id).maybeSingle(),
         supabase.from("swing_scan_runs").select("id, as_of, status, model_version, contract_version, publication_status, market_regime, raw_market_regime, regime_confirmed, regime_reason, regime_confirmation_reason, benchmark_symbol, benchmark_close, benchmark_sma50, benchmark_sma200, benchmark_distance_200_percentage, benchmark_price_date, expected_price_session, session_matches_expected, session_state, breadth_percentage, breadth_available, breadth_coverage_percentage, universe_size, eligible_size, published_size, effective_minimum_score, effective_risk_percentage, scan_blocked_reason, gate_counts, data_issues").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
         supabase.from("swing_monitor_runs").select("id, as_of, status, contract_version, price_observed_at, candidates_requested, positions_requested, candidates_evaluated, positions_evaluated, candidates_checked, positions_checked, notification_count, failed_candidate_ids, failed_trade_ids, data_issues").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
@@ -186,11 +233,15 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
         supabase.from("swing_trade_events").select("trade_id, event_at, price, stop_price").eq("user_id", user.id).eq("event_type", "exit_signaled").order("event_at", { ascending: false }).limit(500),
         supabase.from("analyzer_notification_deliveries").select("id, delivery_key, channel, status, attempt_count, claimed_at, last_attempt_at, error_message").eq("user_id", user.id).in("channel", ["swing-eod", "swing-monitor"]).in("status", ["claimed", "uncertain"]).order("claimed_at", { ascending: false }).limit(20),
         supabase.rpc("get_kite_connection_status"),
+        supabase.from("swing_worker_heartbeats").select("worker_id, worker_version, observed_public_ip, worker_status, execution_mode, kite_session_healthy, quote_stream_healthy, reconciliation_healthy, heartbeat_at, details").eq("user_id", user.id).order("heartbeat_at", { ascending: false }).limit(1).maybeSingle(),
+        supabase.from("swing_broker_account_snapshots").select("observed_at, account_status, available_cash, utilised_debits, net_equity, holdings_count, positions_count, orders_count, trades_count").eq("user_id", user.id).order("observed_at", { ascending: false }).limit(1).maybeSingle(),
+        supabase.from("swing_reconciliation_runs").select("id, reconciliation_status, tracker_positions, broker_positions, matched_positions, mismatch_positions, broker_only_positions, checked_at, details").eq("user_id", user.id).order("checked_at", { ascending: false }).limit(1).maybeSingle(),
+        supabase.from("swing_position_reconciliations").select("reconciliation_run_id, symbol, reconciliation_status, tracker_quantity, broker_quantity, tracker_average_price, broker_average_price").eq("user_id", user.id).order("checked_at", { ascending: false }).limit(100),
     ]);
     const params = await searchParams;
-    const queryError = settingsResult.error || scanResult.error || monitorResult.error || candidatesResult.error || tradesResult.error || tradeEventsResult.error || deliveriesResult.error || kiteConnectionResult.error;
+    const queryError = settingsResult.error || scanResult.error || monitorResult.error || candidatesResult.error || tradesResult.error || tradeEventsResult.error || deliveriesResult.error || kiteConnectionResult.error || kiteWorkerResult.error || kiteAccountResult.error || kiteReconciliationResult.error || kiteReconciliationRowsResult.error;
     if (queryError) {
-        return <main className="mx-auto max-w-5xl px-4 py-8"><div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-800"><h1 className="font-semibold">Swing Lab migration required</h1><p className="mt-2 text-sm">{queryError.message}</p><p className="mt-2 text-xs">Apply all pending Supabase migrations, including <code>202608020001_swing_kite_auth_foundation.sql</code>, then reload this page.</p></div></main>;
+        return <main className="mx-auto max-w-5xl px-4 py-8"><div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-800"><h1 className="font-semibold">Swing Lab migration required</h1><p className="mt-2 text-sm">{queryError.message}</p><p className="mt-2 text-xs">Apply all pending Supabase migrations through <code>202608020002_kite_readonly_worker.sql</code>, then reload this page.</p></div></main>;
     }
 
     const settings = (settingsResult.data ?? defaults) as Settings;
@@ -198,6 +249,11 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
     const latestMonitor = monitorResult.data as MonitorRun | null;
     const deliveryRows = (deliveriesResult.data ?? []) as AnalyzerDelivery[];
     const kiteConnection = ((kiteConnectionResult.data ?? [])[0] ?? null) as KiteConnection | null;
+    const kiteWorker = (kiteWorkerResult.data ?? null) as KiteWorkerHeartbeat | null;
+    const kiteAccount = (kiteAccountResult.data ?? null) as KiteAccountSnapshot | null;
+    const kiteReconciliation = (kiteReconciliationResult.data ?? null) as KiteReconciliationRun | null;
+    const kiteReconciliationRows = ((kiteReconciliationRowsResult.data ?? []) as KiteReconciliationRow[])
+        .filter((row) => row.reconciliation_run_id === kiteReconciliation?.id);
     const kiteConfiguration = getKiteConfigurationState();
     const candidates = (candidatesResult.data ?? []) as Candidate[];
     const trades = (tradesResult.data ?? []) as Trade[];
@@ -206,6 +262,11 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
         if (!latestExitEventByTrade.has(event.trade_id)) latestExitEventByTrade.set(event.trade_id, event);
     }
     const now = new Date();
+    const kiteWorkerFresh = Boolean(
+        kiteWorker
+        && now.getTime() - new Date(kiteWorker.heartbeat_at).getTime() <= 10 * 60_000
+        && (!kiteConnection?.connected_at || new Date(kiteWorker.heartbeat_at).getTime() >= new Date(kiteConnection.connected_at).getTime()),
+    );
     const currentIndiaDate = getIndiaDate(now);
     const activeCandidates = candidates
         .filter((candidate) => ["candidate", "ready", "triggered"].includes(candidate.status) && candidate.expires_on >= currentIndiaDate)
@@ -276,7 +337,7 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
         <AnalyzerDeliveryAlerts deliveries={deliveryRows} returnTo="/swing-lab" resolveAction={resolveAnalyzerDelivery} />
         {latestScan ? <AnalyzerContractStatus version={latestScan.contract_version} publisher="Swing scan" /> : null}
         {latestMonitor ? <AnalyzerContractStatus version={latestMonitor.contract_version} publisher="Swing monitor" /> : null}
-        <KiteConnectionCard connection={kiteConnection} configured={kiteConfiguration.configured} />
+        <KiteConnectionCard connection={kiteConnection} configured={kiteConfiguration.configured} worker={kiteWorker} workerFresh={kiteWorkerFresh} account={kiteAccount} reconciliation={kiteReconciliation} reconciliationRows={kiteReconciliationRows} />
         {scanHeartbeatMissed ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900"><p className="font-semibold">End-of-day scan heartbeat is missing</p><p className="mt-1">No scan was published for the latest expected workflow date, {date(expectedScanDate)}. Check the GitHub Action and Tracker publication logs.</p></div> : latestScan?.status === "failed" ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">The latest end-of-day scan failed. Do not treat older candidates as newly validated.</div> : null}
         {monitorHeartbeatMissed ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900"><p className="font-semibold">Morning monitor heartbeat is missing</p><p className="mt-1">No monitor was published for the latest expected workflow date, {date(expectedMonitorDate)}. Verify open positions directly with your broker until the job recovers.</p></div> : latestMonitor?.status === "failed" ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">The latest morning monitor failed. No requested record could be evaluated from fresh data; verify candidates and stops with your broker.</div> : latestMonitor?.status === "partial" ? <div role="alert" className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">The latest morning monitor was partial. Only the explicitly evaluated records below received a fresh check.</div> : null}
 
@@ -377,19 +438,40 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
     </div></main>;
 }
 
-function KiteConnectionCard({ connection, configured }: { connection: KiteConnection | null; configured: boolean }) {
+function KiteConnectionCard({ connection, configured, worker, workerFresh, account, reconciliation, reconciliationRows }: {
+    connection: KiteConnection | null;
+    configured: boolean;
+    worker: KiteWorkerHeartbeat | null;
+    workerFresh: boolean;
+    account: KiteAccountSnapshot | null;
+    reconciliation: KiteReconciliationRun | null;
+    reconciliationRows: KiteReconciliationRow[];
+}) {
     const status = connection?.connection_status ?? "disconnected";
     const active = configured && status === "connected" && Boolean(connection?.has_active_session);
+    const workerHealthy = Boolean(workerFresh && worker?.worker_status === "healthy" && worker.kite_session_healthy);
+    const reconciliationHealthy = Boolean(workerFresh && worker?.reconciliation_healthy && reconciliation?.reconciliation_status === "matched");
+    const accountUsable = Boolean(workerHealthy && account?.account_status === "healthy");
+    const reconciliationAvailable = Boolean(workerFresh && worker?.kite_session_healthy && reconciliation);
+    const reconciliationLabel = !workerFresh || !worker?.kite_session_healthy
+        ? "Unavailable"
+        : !reconciliation
+            ? "Not run"
+            : reconciliationHealthy
+                ? "Matched"
+                : reconciliation.reconciliation_status;
     const statusLabel = !configured
         ? "Configuration pending"
-        : active
-            ? "Connected · read only"
-            : status === "expired"
-                ? "Session expired"
-                : status === "error"
-                    ? "Connection error"
-                    : "Not connected";
-    const tone = active
+        : active && workerHealthy
+            ? "Connected · verified by VPS"
+            : active
+                ? "Connected · waiting for VPS"
+                : status === "expired"
+                    ? "Session expired"
+                    : status === "error"
+                        ? "Connection error"
+                        : "Not connected";
+    const tone = active && workerHealthy
         ? "border-emerald-200 bg-emerald-50 text-emerald-800"
         : status === "error"
             ? "border-red-200 bg-red-50 text-red-800"
@@ -399,27 +481,65 @@ function KiteConnectionCard({ connection, configured }: { connection: KiteConnec
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="flex gap-3">
                 <div className="rounded-lg bg-blue-50 p-2 text-blue-700"><KeyRound className="h-5 w-5" /></div>
-                <div><h2 id="kite-connection-title" className="text-lg font-semibold">Kite connection</h2><p className="mt-1 text-sm text-slate-500">Daily broker authentication for read-only account verification. Order placement is not implemented in this phase.</p></div>
+                <div><h2 id="kite-connection-title" className="text-lg font-semibold">Kite connection and VPS verification</h2><p className="mt-1 text-sm text-slate-500">The static-IP worker reads account state and compares live Swing Lab trades. Batch 2 cannot place, modify or cancel orders.</p></div>
             </div>
             <span role="status" className={`w-fit rounded-full border px-3 py-1 text-xs font-semibold uppercase ${tone}`}>{statusLabel}</span>
         </div>
 
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
             <SmallMetric label="Broker account" value={maskBrokerUserId(connection?.broker_user_id)} />
-            <SmallMetric label="Connected" value={dateTime(connection?.connected_at)} />
             <SmallMetric label="Session expires" value={dateTime(connection?.session_expires_at)} />
+            <SmallMetric label="VPS worker" value={!worker ? "Not observed" : !workerFresh ? "Heartbeat stale" : worker.worker_status} />
+            <SmallMetric label="Reconciliation" value={reconciliationLabel} />
             <SmallMetric label="Order execution" value="Blocked" />
+        </div>
+
+        <div className="mt-4 grid gap-4 lg:grid-cols-3">
+            <div className="rounded-lg border border-slate-200 p-4">
+                <div className="flex items-center gap-2"><Server className="h-4 w-4 text-blue-700" /><h3 className="text-sm font-semibold">Static-IP worker</h3></div>
+                <dl className="mt-3 space-y-2 text-sm">
+                    <OperationalRow label="Heartbeat" value={dateTime(worker?.heartbeat_at)} good={workerFresh} />
+                    <OperationalRow label="Public IP" value={worker?.observed_public_ip ?? "Unavailable"} good={Boolean(workerFresh && worker?.observed_public_ip)} />
+                    <OperationalRow label="Kite session" value={worker?.kite_session_healthy ? "Validated" : "Not validated"} good={Boolean(workerFresh && worker?.kite_session_healthy)} />
+                    <OperationalRow label="Quote stream" value="Not started in Batch 2" />
+                </dl>
+            </div>
+            <div className="rounded-lg border border-slate-200 p-4">
+                <div className="flex items-center gap-2"><WalletCards className="h-4 w-4 text-blue-700" /><h3 className="text-sm font-semibold">Read-only account snapshot</h3></div>
+                <dl className="mt-3 space-y-2 text-sm">
+                    <OperationalRow label="Available cash" value={accountUsable ? optionalMoney(account?.available_cash) : "Unavailable"} good={accountUsable} />
+                    <OperationalRow label="Holdings" value={accountUsable && account ? String(account.holdings_count) : "Unavailable"} />
+                    <OperationalRow label="Open broker positions" value={accountUsable && account ? String(account.positions_count) : "Unavailable"} />
+                    <OperationalRow label="Last successful read" value={dateTime(account?.observed_at)} good={accountUsable} />
+                </dl>
+            </div>
+            <div className="rounded-lg border border-slate-200 p-4">
+                <div className="flex items-center gap-2"><Activity className="h-4 w-4 text-blue-700" /><h3 className="text-sm font-semibold">Swing position reconciliation</h3></div>
+                <dl className="mt-3 space-y-2 text-sm">
+                    <OperationalRow label="Tracked live symbols" value={reconciliationAvailable && reconciliation ? String(reconciliation.tracker_positions) : "Unavailable"} />
+                    <OperationalRow label="Matched" value={reconciliationAvailable && reconciliation ? String(reconciliation.matched_positions) : "Unavailable"} good={reconciliationAvailable ? reconciliationHealthy : false} />
+                    <OperationalRow label="Mismatched" value={reconciliationAvailable && reconciliation ? String(reconciliation.mismatch_positions) : "Unavailable"} good={reconciliationAvailable ? reconciliation?.mismatch_positions === 0 : false} />
+                    <OperationalRow label="Other broker holdings" value={reconciliationAvailable && reconciliation ? `${reconciliation.broker_only_positions} informational` : "Unavailable"} />
+                </dl>
+            </div>
         </div>
 
         {!configured ? <div role="alert" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><p className="font-semibold">Vercel configuration required</p><p className="mt-1">Add the documented server-side Kite variables after deploying this code. No credentials belong in browser-exposed settings.</p></div> : null}
         {connection?.error_message ? <div role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-900">{connection.error_message}</div> : null}
+        {active && !workerFresh ? <div role="alert" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><p className="font-semibold">VPS worker is not current</p><p className="mt-1">Authentication succeeded, but no fresh worker heartbeat was received within ten minutes. Broker data and reconciliation must be treated as unavailable.</p></div> : null}
+        {reconciliationAvailable && reconciliation?.reconciliation_status === "mismatch" ? <div role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-900"><p className="font-semibold">Broker and Swing Lab differ</p><p className="mt-1">Review these quantities. New automatic entries remain fail-closed.</p><ul className="mt-2 space-y-1 text-xs">{reconciliationRows.filter((row) => row.reconciliation_status === "mismatch").map((row) => <li key={row.symbol}>{row.symbol}: Tracker {row.tracker_quantity ?? "unavailable"} · Kite {row.broker_quantity ?? "unavailable"}</li>)}</ul></div> : null}
 
         <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
             {configured ? <a href="/api/kite/login" className="inline-flex items-center justify-center rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2">{active ? "Reconnect Kite for today" : "Connect Kite for today"}</a> : <button type="button" disabled className="rounded-lg bg-slate-200 px-4 py-2.5 text-sm font-medium text-slate-500">Connect Kite for today</button>}
             {connection && status !== "disconnected" ? <form action={disconnectKiteAccount}><ConfirmSubmitButton confirmation="Remove the locally stored Kite session? Swing automation will remain advisory and disarmed." pendingText="Removing session...">Remove stored session</ConfirmSubmitButton></form> : null}
-            <p className="flex items-center gap-2 text-xs text-slate-500"><ShieldCheck className="h-4 w-4 text-emerald-600" />Encrypted token storage · daily expiry · no live orders</p>
+            <p className="flex items-center gap-2 text-xs text-slate-500"><ShieldCheck className="h-4 w-4 text-emerald-600" />Encrypted token · daily expiry · read-only allow-list · no live orders</p>
         </div>
     </section>;
+}
+
+function OperationalRow({ label, value, good }: { label: string; value: string; good?: boolean }) {
+    const tone = good === undefined ? "text-slate-700" : good ? "text-emerald-700" : "text-amber-700";
+    return <div className="flex items-start justify-between gap-3"><dt className="text-slate-500">{label}</dt><dd className={`text-right font-medium capitalize ${tone}`}>{value}</dd></div>;
 }
 
 function CandidateCard({ candidate, settings, today, entryAllowed, entryBlockedReason, carriedForward }: { candidate: Candidate; settings: Settings; today: string; entryAllowed: boolean; entryBlockedReason: string | null; carriedForward: boolean }) {

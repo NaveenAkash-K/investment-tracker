@@ -17,10 +17,10 @@ The Targets page includes a new-money allocation autopilot. It uses the entered 
 
 1. Install packages with `npm install`.
 2. Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` to `.env.local`.
-3. For a new Supabase project, apply every SQL file in `supabase/migrations` in filename order, starting with [the initial schema](supabase/migrations/202607190001_initial_schema.sql). For an existing installation, apply only migrations newer than the last one already run. The current final migration is [the Swing Kite authentication foundation](supabase/migrations/202608020001_swing_kite_auth_foundation.sql).
+3. For a new Supabase project, apply every SQL file in `supabase/migrations` in filename order, starting with [the initial schema](supabase/migrations/202607190001_initial_schema.sql). For an existing installation, apply only migrations newer than the last one already run. The current final migration is [the Kite read-only worker foundation](supabase/migrations/202608020002_kite_readonly_worker.sql).
 4. Run `npm run dev` and open `http://localhost:3000`.
 
-Migrations are transactional. The latest migration adds the fail-closed Swing execution data model, isolates encrypted Kite sessions from browser access, and introduces replay-resistant daily authentication without enabling broker orders.
+Migrations are transactional. The Kite migrations add the fail-closed Swing execution data model, isolate encrypted sessions from browser access, and support read-only static-IP worker health and position reconciliation without enabling broker orders.
 
 ## Market Intelligence integration
 
@@ -58,6 +58,12 @@ Set these only in server-side local/Vercel environments after applying `20260802
 - `KITE_TOKEN_ENCRYPTION_KEY` — a base64-encoded random 32-byte key.
 
 The registered Kite redirect URL must be `${INVESTMENT_TRACKER_APP_URL}/api/kite/callback`. Authentication attempts are user-bound, single-use and expire after ten minutes. Stored access-token ciphertext is not selectable by authenticated browser clients. The displayed session expires at 06:00 IST on the next calendar day. Disconnecting removes the encrypted session and returns automation controls to advisory/disarmed mode.
+
+After applying `202608020002_kite_readonly_worker.sql`, Swing Lab also displays
+the latest static-IP worker heartbeat, read-only broker account snapshot, and
+live Swing position reconciliation. The VPS functions are executable only by
+the Supabase service role and accept `observe` mode only. A heartbeat older than
+ten minutes is shown as unavailable; it never inherits a previous healthy state.
 
 ## News & Events workflow
 

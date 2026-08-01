@@ -40,12 +40,24 @@ test("broker ids are masked before display", () => {
     assert.equal(maskBrokerUserId(null), "Unavailable");
 });
 
-test("Batch 1 has a permanent read-only order guard", () => {
-    assert.equal(KITE_EXECUTION_PHASE, "read_only_authentication");
+test("Batch 2 has a permanent read-only order guard", () => {
+    assert.equal(KITE_EXECUTION_PHASE, "read_only_reconciliation");
     assert.throws(
         () => assertKiteOrderPlacementAllowed(),
         /order placement is unavailable/i,
     );
+});
+
+test("Kite worker migration exposes only service-role read-only cycle functions", () => {
+    const migration = readFileSync(
+        new URL("../supabase/migrations/202608020002_kite_readonly_worker.sql", import.meta.url),
+        "utf8",
+    );
+    assert.match(migration, /get_kite_worker_bootstrap/);
+    assert.match(migration, /publish_kite_readonly_cycle/);
+    assert.match(migration, /Batch 2 accepts observe mode only/);
+    assert.match(migration, /grant execute on function public\.get_kite_worker_bootstrap\(uuid\) to service_role/);
+    assert.doesNotMatch(migration, /place_order|modify_order|cancel_order|submit_order/);
 });
 
 test("Kite migration isolates secrets and defaults automation to advisory and disarmed", () => {
