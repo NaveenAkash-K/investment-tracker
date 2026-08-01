@@ -63,6 +63,14 @@ export async function saveSwingSettings(formData: FormData) {
     }, "Swing Lab risk settings saved.");
 }
 
+export async function disconnectKiteAccount() {
+    await execute(async () => {
+        const supabase = await authenticatedClient();
+        const { error } = await supabase.rpc("disconnect_kite_account");
+        if (error) throw new Error(error.message);
+    }, "The stored Kite session was removed. Swing automation remains advisory and disarmed.");
+}
+
 export async function confirmSwingEntry(formData: FormData) {
     await execute(async () => {
         const supabase = await authenticatedClient();

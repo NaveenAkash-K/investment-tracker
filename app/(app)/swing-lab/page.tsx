@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { AlertTriangle, CheckCircle2, Clock3 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock3, KeyRound, ShieldCheck } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { PageHeader } from "@/components/page-header";
 import { StatusBanner } from "@/components/status-banner";
@@ -10,9 +10,12 @@ import { AnalyzerDeliveryAlerts, type AnalyzerDelivery } from "@/components/anal
 import { isUsableSwingScan } from "@/lib/analyzer-contract";
 import { calculateSwingExecutionQuality, calculateSwingPerformance, calculateSwingQuantity } from "@/lib/swing";
 import { getIndiaDate, getLatestExpectedWeekdayRunDate } from "@/lib/performance";
+import { getKiteConfigurationState } from "@/lib/kite/config";
+import { maskBrokerUserId } from "@/lib/kite/session";
 import {
     confirmSwingEntry,
     confirmSwingExit,
+    disconnectKiteAccount,
     reconcileSwingCorporateAction,
     saveSwingSettings,
     skipSwingCandidate,
@@ -77,6 +80,17 @@ type TradeEvent = {
     event_at: string;
     price: number | string | null;
     stop_price: number | string | null;
+};
+type KiteConnection = {
+    connection_status: "disconnected" | "connected" | "expired" | "error";
+    broker_user_id: string | null;
+    user_name: string | null;
+    connected_at: string | null;
+    last_validated_at: string | null;
+    session_expires_at: string | null;
+    disconnected_at: string | null;
+    error_message: string | null;
+    has_active_session: boolean;
 };
 
 const defaults: Settings = {
@@ -163,7 +177,7 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) redirect("/auth/login");
 
-    const [settingsResult, scanResult, monitorResult, candidatesResult, tradesResult, tradeEventsResult, deliveriesResult] = await Promise.all([
+    const [settingsResult, scanResult, monitorResult, candidatesResult, tradesResult, tradeEventsResult, deliveriesResult, kiteConnectionResult] = await Promise.all([
         supabase.from("swing_lab_settings").select("trading_capital_inr, risk_per_trade_percentage, max_open_positions, max_sector_positions, minimum_setup_score, paper_mode").eq("user_id", user.id).maybeSingle(),
         supabase.from("swing_scan_runs").select("id, as_of, status, model_version, contract_version, publication_status, market_regime, raw_market_regime, regime_confirmed, regime_reason, regime_confirmation_reason, benchmark_symbol, benchmark_close, benchmark_sma50, benchmark_sma200, benchmark_distance_200_percentage, benchmark_price_date, expected_price_session, session_matches_expected, session_state, breadth_percentage, breadth_available, breadth_coverage_percentage, universe_size, eligible_size, published_size, effective_minimum_score, effective_risk_percentage, scan_blocked_reason, gate_counts, data_issues").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
         supabase.from("swing_monitor_runs").select("id, as_of, status, contract_version, price_observed_at, candidates_requested, positions_requested, candidates_evaluated, positions_evaluated, candidates_checked, positions_checked, notification_count, failed_candidate_ids, failed_trade_ids, data_issues").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
@@ -171,17 +185,20 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
         supabase.from("swing_trades").select("id, candidate_id, symbol, company_name, sector, trade_mode, status, signal_entry, maximum_entry, entry_date, entry_price, quantity, initial_stop, current_stop, initial_risk_per_share, planned_risk_inr, current_price, current_price_as_of, highest_close, unrealized_pnl_inr, unrealized_r_multiple, exit_signal_reason, exit_signal_at, exit_date, exit_price, fees_inr, realized_pnl_inr, realized_r_multiple, notes, corporate_action_review_required, corporate_action_reason").eq("user_id", user.id).order("entry_date", { ascending: false }).limit(200),
         supabase.from("swing_trade_events").select("trade_id, event_at, price, stop_price").eq("user_id", user.id).eq("event_type", "exit_signaled").order("event_at", { ascending: false }).limit(500),
         supabase.from("analyzer_notification_deliveries").select("id, delivery_key, channel, status, attempt_count, claimed_at, last_attempt_at, error_message").eq("user_id", user.id).in("channel", ["swing-eod", "swing-monitor"]).in("status", ["claimed", "uncertain"]).order("claimed_at", { ascending: false }).limit(20),
+        supabase.rpc("get_kite_connection_status"),
     ]);
     const params = await searchParams;
-    const queryError = settingsResult.error || scanResult.error || monitorResult.error || candidatesResult.error || tradesResult.error || tradeEventsResult.error || deliveriesResult.error;
+    const queryError = settingsResult.error || scanResult.error || monitorResult.error || candidatesResult.error || tradesResult.error || tradeEventsResult.error || deliveriesResult.error || kiteConnectionResult.error;
     if (queryError) {
-        return <main className="mx-auto max-w-5xl px-4 py-8"><div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-800"><h1 className="font-semibold">Swing Lab migration required</h1><p className="mt-2 text-sm">{queryError.message}</p><p className="mt-2 text-xs">Apply all pending Supabase migrations, including <code>202607300001_second_rereview_fixes.sql</code>, then reload this page.</p></div></main>;
+        return <main className="mx-auto max-w-5xl px-4 py-8"><div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-800"><h1 className="font-semibold">Swing Lab migration required</h1><p className="mt-2 text-sm">{queryError.message}</p><p className="mt-2 text-xs">Apply all pending Supabase migrations, including <code>202608020001_swing_kite_auth_foundation.sql</code>, then reload this page.</p></div></main>;
     }
 
     const settings = (settingsResult.data ?? defaults) as Settings;
     const latestScan = scanResult.data as Scan | null;
     const latestMonitor = monitorResult.data as MonitorRun | null;
     const deliveryRows = (deliveriesResult.data ?? []) as AnalyzerDelivery[];
+    const kiteConnection = ((kiteConnectionResult.data ?? [])[0] ?? null) as KiteConnection | null;
+    const kiteConfiguration = getKiteConfigurationState();
     const candidates = (candidatesResult.data ?? []) as Candidate[];
     const trades = (tradesResult.data ?? []) as Trade[];
     const latestExitEventByTrade = new Map<string, TradeEvent>();
@@ -259,6 +276,7 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
         <AnalyzerDeliveryAlerts deliveries={deliveryRows} returnTo="/swing-lab" resolveAction={resolveAnalyzerDelivery} />
         {latestScan ? <AnalyzerContractStatus version={latestScan.contract_version} publisher="Swing scan" /> : null}
         {latestMonitor ? <AnalyzerContractStatus version={latestMonitor.contract_version} publisher="Swing monitor" /> : null}
+        <KiteConnectionCard connection={kiteConnection} configured={kiteConfiguration.configured} />
         {scanHeartbeatMissed ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900"><p className="font-semibold">End-of-day scan heartbeat is missing</p><p className="mt-1">No scan was published for the latest expected workflow date, {date(expectedScanDate)}. Check the GitHub Action and Tracker publication logs.</p></div> : latestScan?.status === "failed" ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">The latest end-of-day scan failed. Do not treat older candidates as newly validated.</div> : null}
         {monitorHeartbeatMissed ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900"><p className="font-semibold">Morning monitor heartbeat is missing</p><p className="mt-1">No monitor was published for the latest expected workflow date, {date(expectedMonitorDate)}. Verify open positions directly with your broker until the job recovers.</p></div> : latestMonitor?.status === "failed" ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">The latest morning monitor failed. No requested record could be evaluated from fresh data; verify candidates and stops with your broker.</div> : latestMonitor?.status === "partial" ? <div role="alert" className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">The latest morning monitor was partial. Only the explicitly evaluated records below received a fresh check.</div> : null}
 
@@ -357,6 +375,51 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
             </form>
         </section>
     </div></main>;
+}
+
+function KiteConnectionCard({ connection, configured }: { connection: KiteConnection | null; configured: boolean }) {
+    const status = connection?.connection_status ?? "disconnected";
+    const active = configured && status === "connected" && Boolean(connection?.has_active_session);
+    const statusLabel = !configured
+        ? "Configuration pending"
+        : active
+            ? "Connected · read only"
+            : status === "expired"
+                ? "Session expired"
+                : status === "error"
+                    ? "Connection error"
+                    : "Not connected";
+    const tone = active
+        ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+        : status === "error"
+            ? "border-red-200 bg-red-50 text-red-800"
+            : "border-amber-200 bg-amber-50 text-amber-900";
+
+    return <section className="mb-6 rounded-xl border border-slate-200 bg-white p-5" aria-labelledby="kite-connection-title">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="flex gap-3">
+                <div className="rounded-lg bg-blue-50 p-2 text-blue-700"><KeyRound className="h-5 w-5" /></div>
+                <div><h2 id="kite-connection-title" className="text-lg font-semibold">Kite connection</h2><p className="mt-1 text-sm text-slate-500">Daily broker authentication for read-only account verification. Order placement is not implemented in this phase.</p></div>
+            </div>
+            <span role="status" className={`w-fit rounded-full border px-3 py-1 text-xs font-semibold uppercase ${tone}`}>{statusLabel}</span>
+        </div>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <SmallMetric label="Broker account" value={maskBrokerUserId(connection?.broker_user_id)} />
+            <SmallMetric label="Connected" value={dateTime(connection?.connected_at)} />
+            <SmallMetric label="Session expires" value={dateTime(connection?.session_expires_at)} />
+            <SmallMetric label="Order execution" value="Blocked" />
+        </div>
+
+        {!configured ? <div role="alert" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><p className="font-semibold">Vercel configuration required</p><p className="mt-1">Add the documented server-side Kite variables after deploying this code. No credentials belong in browser-exposed settings.</p></div> : null}
+        {connection?.error_message ? <div role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-900">{connection.error_message}</div> : null}
+
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+            {configured ? <a href="/api/kite/login" className="inline-flex items-center justify-center rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2">{active ? "Reconnect Kite for today" : "Connect Kite for today"}</a> : <button type="button" disabled className="rounded-lg bg-slate-200 px-4 py-2.5 text-sm font-medium text-slate-500">Connect Kite for today</button>}
+            {connection && status !== "disconnected" ? <form action={disconnectKiteAccount}><ConfirmSubmitButton confirmation="Remove the locally stored Kite session? Swing automation will remain advisory and disarmed." pendingText="Removing session...">Remove stored session</ConfirmSubmitButton></form> : null}
+            <p className="flex items-center gap-2 text-xs text-slate-500"><ShieldCheck className="h-4 w-4 text-emerald-600" />Encrypted token storage · daily expiry · no live orders</p>
+        </div>
+    </section>;
 }
 
 function CandidateCard({ candidate, settings, today, entryAllowed, entryBlockedReason, carriedForward }: { candidate: Candidate; settings: Settings; today: string; entryAllowed: boolean; entryBlockedReason: string | null; carriedForward: boolean }) {

@@ -17,10 +17,10 @@ The Targets page includes a new-money allocation autopilot. It uses the entered 
 
 1. Install packages with `npm install`.
 2. Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` to `.env.local`.
-3. For a new Supabase project, apply every SQL file in `supabase/migrations` in filename order, starting with [the initial schema](supabase/migrations/202607190001_initial_schema.sql). For an existing installation, apply only migrations newer than the last one already run. The current final migration is [the second rereview fixes migration](supabase/migrations/202607300001_second_rereview_fixes.sql).
+3. For a new Supabase project, apply every SQL file in `supabase/migrations` in filename order, starting with [the initial schema](supabase/migrations/202607190001_initial_schema.sql). For an existing installation, apply only migrations newer than the last one already run. The current final migration is [the Swing Kite authentication foundation](supabase/migrations/202608020001_swing_kite_auth_foundation.sql).
 4. Run `npm run dev` and open `http://localhost:3000`.
 
-Migrations are transactional. The latest migration enforces reconciled Swing-monitor coverage, restores older monitor backups safely, and adds manual recovery for unresolved analyzer-email claims.
+Migrations are transactional. The latest migration adds the fail-closed Swing execution data model, isolates encrypted Kite sessions from browser access, and introduces replay-resistant daily authentication without enabling broker orders.
 
 ## Market Intelligence integration
 
@@ -45,6 +45,19 @@ Swing Lab is a separate risk budget and journal for end-of-day Indian-equity swi
 5. The daily analyser updates current price, raises trailing stops without lowering them, and flags exits. Confirm the actual exit fill in the app to close the journal entry.
 
 The scanner is long-only and uses the Nifty 200 universe, liquidity and trend gates, relative strength, a recent-breakout pullback, volatility-sized entries/stops, market breadth, sector caps, and portfolio-level risk limits. RED blocks new candidates. AMBER requires the higher score threshold, halves configured risk, and publishes at most one new candidate. Existing candidates and positions continue to be monitored in every regime. No qualified candidate is a normal result; the application never forces capital into a trade. Exchange holidays and provider-session mismatches cannot create new candidates. A detected split or bonus pauses the affected trade until broker-adjusted entry, quantity, and stop values are reconciled in the UI.
+
+### Kite authentication foundation
+
+The first Live Auto implementation batch is read-only. It adds daily Kite authentication, encrypted access-token storage, fail-closed execution tables, and a connection card in Swing Lab. It does not contain a broker order endpoint and cannot submit, modify, or cancel an order.
+
+Set these only in server-side local/Vercel environments after applying `202608020001_swing_kite_auth_foundation.sql`:
+
+- `INVESTMENT_TRACKER_APP_URL` — the production origin, without a path;
+- `KITE_API_KEY` — the app API key;
+- `KITE_API_SECRET` — the app secret, never exposed to the browser;
+- `KITE_TOKEN_ENCRYPTION_KEY` — a base64-encoded random 32-byte key.
+
+The registered Kite redirect URL must be `${INVESTMENT_TRACKER_APP_URL}/api/kite/callback`. Authentication attempts are user-bound, single-use and expire after ten minutes. Stored access-token ciphertext is not selectable by authenticated browser clients. The displayed session expires at 06:00 IST on the next calendar day. Disconnecting removes the encrypted session and returns automation controls to advisory/disarmed mode.
 
 ## News & Events workflow
 
