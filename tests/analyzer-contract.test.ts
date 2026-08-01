@@ -5,6 +5,7 @@ import test from "node:test";
 import {
     ANALYZER_CONTRACT_VERSION,
     getAnalyzerContractState,
+    isDisplayableMonthlySignalRun,
     isUsableMonthlySignalRun,
     isUsableSwingScan,
     LEGACY_ANALYZER_CONTRACT_VERSION,
@@ -73,6 +74,21 @@ test("monthly comparisons require the current month and a successful supported p
     assert.equal(isUsableMonthlySignalRun({ ...valid, status: "partial" }, "2026-07"), false);
     assert.equal(isUsableMonthlySignalRun({ ...valid, publicationStatus: "failed" }, "2026-07"), false);
     assert.equal(isUsableMonthlySignalRun({ ...valid, contractVersion: "future-v99" }, "2026-07"), false);
+});
+
+test("read-only monthly sections may display a current published partial run", () => {
+    const valid = {
+        monthKey: "2026-08",
+        status: "partial",
+        contractVersion: ANALYZER_CONTRACT_VERSION,
+        publicationStatus: "published",
+    };
+    assert.equal(isDisplayableMonthlySignalRun(valid, "2026-08"), true);
+    assert.equal(isDisplayableMonthlySignalRun({ ...valid, status: "successful" }, "2026-08"), true);
+    assert.equal(isDisplayableMonthlySignalRun({ ...valid, status: "failed" }, "2026-08"), false);
+    assert.equal(isDisplayableMonthlySignalRun({ ...valid, monthKey: "2026-07" }, "2026-08"), false);
+    assert.equal(isDisplayableMonthlySignalRun({ ...valid, publicationStatus: "failed" }, "2026-08"), false);
+    assert.equal(isDisplayableMonthlySignalRun({ ...valid, contractVersion: "future-v99" }, "2026-08"), false);
 });
 
 test("swing entries require a confirmed published price session", () => {
@@ -148,4 +164,27 @@ test("monthly comparison does not render a missing suggestion as zero", () => {
         "utf8"
     );
     assert.match(page, /suggestedByCategory\.has\(category\) \? money\(.+\) : "Unavailable"/);
+});
+
+test("global and strategic-policy explanations are persisted and restored", () => {
+    const migration = readFileSync(
+        new URL("../supabase/migrations/202608010001_global_policy_signals.sql", import.meta.url),
+        "utf8"
+    );
+    const page = readFileSync(
+        new URL("../app/(app)/market-intelligence/page.tsx", import.meta.url),
+        "utf8"
+    );
+    const restoreAction = readFileSync(
+        new URL("../app/(app)/import-export/actions.ts", import.meta.url),
+        "utf8"
+    );
+    assert.match(migration, /base_weight_percentage numeric/);
+    assert.match(migration, /adjustment_percentage numeric/);
+    assert.match(migration, /restore_global_policy_signal_details/);
+    assert.match(migration, /restore_complete_portfolio_backup_v8/);
+    assert.match(restoreAction, /restore_complete_portfolio_backup_v8/);
+    assert.match(page, /Strategic allocation signals/);
+    assert.match(page, /Price session not applicable/);
+    assert.match(page, /Base shows the regime-adjusted strategic allocation/);
 });

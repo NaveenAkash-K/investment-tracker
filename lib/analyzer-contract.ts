@@ -41,6 +41,23 @@ export function isUsableMonthlySignalRun(
     );
 }
 
+/**
+ * A published partial monthly run is safe for read-only sections whose own
+ * calculation fails closed when an input market is unavailable. It must not
+ * be used for contribution comparisons or to approve the full monthly plan.
+ */
+export function isDisplayableMonthlySignalRun(
+    run: MonthlySignalRunValidityInput,
+    expectedMonthKey: string,
+) {
+    return (
+        run.monthKey === expectedMonthKey
+        && ["successful", "partial"].includes(run.status)
+        && (run.publicationStatus ?? "published") === "published"
+        && isSupportedAnalyzerContract(run.contractVersion)
+    );
+}
+
 export type SwingScanValidityInput = {
     status: string;
     sessionState: string;

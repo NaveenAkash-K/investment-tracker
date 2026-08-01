@@ -6,7 +6,7 @@ import { StatusBanner } from "@/components/status-banner";
 import { FormSubmitButton } from "@/components/form-submit-button";
 import { AnalyzerContractStatus } from "@/components/analyzer-contract-status";
 import { AnalyzerDeliveryAlerts, type AnalyzerDelivery } from "@/components/analyzer-delivery-alerts";
-import { isUsableMonthlySignalRun } from "@/lib/analyzer-contract";
+import { isDisplayableMonthlySignalRun, isUsableMonthlySignalRun } from "@/lib/analyzer-contract";
 import { getIndiaDate, getIndiaMonthKey, getIndiaMonthStart, getLatestExpectedDailyRunDate } from "@/lib/performance";
 import { resolveAnalyzerDelivery } from "../analyzer-deliveries/actions";
 import { acknowledgeSignalAlert, saveSignalDecision } from "./actions";
@@ -71,6 +71,11 @@ type GlobalRecommendation = {
     approximate_usd: number | string | null;
     weight_percentage: number | string;
     score: number | string | null;
+    role: "strategic_core" | "growth_satellite" | "em_satellite" | "cash" | null;
+    base_weight_percentage: number | string | null;
+    adjustment_percentage: number | string | null;
+    signal_action: string | null;
+    reason: string | null;
 };
 type SignalAlert = {
     id: string;
@@ -133,6 +138,14 @@ export default async function MarketIntelligencePage({ searchParams }: { searchP
     }, currentMonthKey)
         ? currentMonthAttempt
         : undefined;
+    const displayableMonthly = currentMonthAttempt && isDisplayableMonthlySignalRun({
+        monthKey: getIndiaMonthKey(currentMonthAttempt.as_of),
+        status: currentMonthAttempt.status,
+        contractVersion: currentMonthAttempt.contract_version,
+        publicationStatus: currentMonthAttempt.publication_status,
+    }, currentMonthKey)
+        ? currentMonthAttempt
+        : undefined;
     const previousMonthly = latestMonthly
         ? runs.find((run) => (
             run.run_type === "monthly"
@@ -152,7 +165,7 @@ export default async function MarketIntelligencePage({ searchParams }: { searchP
     const [scoresResult, sipResult, globalResult, alertsResult, categoriesResult, performanceResult, deliveriesResult] = await Promise.all([
         runIds.length ? supabase.from("market_signal_scores").select("id, run_id, market_key, name, symbol, final_score, score_change, action, data_coverage, actionable, price_as_of, valuation_score, valuation_source, valuation_as_of, valuation_method, technical_score, macro_score, portfolio_fit_score, risk_score, metrics").eq("user_id", user.id).in("run_id", runIds) : Promise.resolve({ data: [], error: null }),
         monthlyRunIds.length ? supabase.from("sip_signal_recommendations").select("id, run_id, sip_plan_id, fund_name, category_name, planned_amount_inr, target_only_amount_inr, suggested_amount_inr, score, data_coverage, projected_category_percentage, reason").eq("user_id", user.id).in("run_id", monthlyRunIds).order("fund_name") : Promise.resolve({ data: [], error: null }),
-        latestMonthly ? supabase.from("global_signal_recommendations").select("id, instrument, amount_inr, approximate_usd, weight_percentage, score").eq("user_id", user.id).eq("run_id", latestMonthly.id).order("weight_percentage", { ascending: false }) : Promise.resolve({ data: [], error: null }),
+        displayableMonthly ? supabase.from("global_signal_recommendations").select("id, instrument, amount_inr, approximate_usd, weight_percentage, score, role, base_weight_percentage, adjustment_percentage, signal_action, reason").eq("user_id", user.id).eq("run_id", displayableMonthly.id).order("weight_percentage", { ascending: false }) : Promise.resolve({ data: [], error: null }),
         supabase.from("market_signal_alerts").select("id, alert_type, asset, title, message, recommended_action, acknowledged_at, created_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(20),
         supabase.from("asset_categories").select("id, name").eq("user_id", user.id),
         supabase.from("monthly_category_performance").select("category_id, contribution_inr").eq("user_id", user.id).eq("performance_month", getIndiaMonthStart()),
@@ -161,6 +174,8 @@ export default async function MarketIntelligencePage({ searchParams }: { searchP
 
     const secondaryError = scoresResult.error || sipResult.error || globalResult.error || alertsResult.error || categoriesResult.error || performanceResult.error || deliveriesResult.error;
     const scores = ((scoresResult.data ?? []) as MarketScore[]).filter((score) => score.run_id === latestRun?.id).sort((a, b) => number(b.final_score) - number(a.final_score));
+    const policyScores = scores.filter((score) => objectValue(score.metrics).signal_type === "strategic_policy");
+    const pricedMarketScores = scores.filter((score) => objectValue(score.metrics).signal_type !== "strategic_policy");
     const allSipRows = (sipResult.data ?? []) as SipRecommendation[];
     const sipRows = allSipRows.filter((row) => row.run_id === latestMonthly?.id);
     const previousSipRows = allSipRows.filter((row) => row.run_id === previousMonthly?.id);
@@ -203,8 +218,10 @@ export default async function MarketIntelligencePage({ searchParams }: { searchP
 
             <section className="mt-6 rounded-xl border border-slate-200 bg-white p-5">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><h2 className="text-lg font-semibold">Current market signals</h2><p className="mt-1 text-sm text-slate-500">Markets with insufficient input coverage or stale prices are blocked instead of receiving a neutral recommendation.</p></div><span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">USD/INR {latestRun.usd_inr_rate ? number(latestRun.usd_inr_rate).toFixed(2) : "N/A"}</span></div>
-                <MarketScoresTable scores={scores} />
+                <MarketScoresTable scores={pricedMarketScores} />
             </section>
+
+            {policyScores.length ? <section className="mt-6"><StrategicPolicySignals scores={policyScores} /></section> : null}
 
             <section className="mt-6 grid gap-6 xl:grid-cols-[1.35fr_0.65fr]">
                 <div className="rounded-xl border border-slate-200 bg-white p-5"><div className="flex items-start justify-between gap-4"><div><h2 className="text-lg font-semibold">Monthly SIP decision</h2><p className="mt-1 text-sm text-slate-500">Planned and target-only amounts form the baseline; the suggested column contains the bounded signal tilt.</p></div>{latestMonthly && <span className="text-xs text-slate-500">{formatDate(latestMonthly.as_of)}</span>}</div>
@@ -214,7 +231,22 @@ export default async function MarketIntelligencePage({ searchParams }: { searchP
             </section>
 
             <section className="mt-6 grid gap-6 lg:grid-cols-2"><div className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="text-lg font-semibold">Suggested versus actual this month</h2><p className="mt-1 text-sm text-slate-500">Actual values come from Monthly Review and remain authoritative.</p>{!latestMonthly ? <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Suggested amounts are unavailable because no valid, successful recommendation has been published for {currentMonthKey}.</p> : null}<div className="mt-4 space-y-3">{Array.from(new Set([...suggestedByCategory.keys(), ...actualByCategory.keys()])).map((category) => <div key={category} className="grid grid-cols-[1fr_auto_auto] gap-4 rounded-lg bg-slate-50 p-3 text-sm"><span className="font-medium">{category}</span><span className="text-slate-500">Suggested {suggestedByCategory.has(category) ? money(suggestedByCategory.get(category)) : "Unavailable"}</span><span className="font-semibold">Actual {money(actualByCategory.get(category))}</span></div>)}</div><Link href="/monthly-review" className="mt-4 inline-flex rounded-lg bg-slate-950 px-4 py-2 text-sm font-medium text-white">Open Monthly Review</Link></div>
-                <div className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="text-lg font-semibold">Global split</h2><p className="mt-1 text-sm text-slate-500">Indicative conversion only; actual FX remains in Monthly Review.</p><div className="mt-4 space-y-3">{globalRows.map((row) => <div key={row.id} className="flex items-center justify-between rounded-lg bg-slate-50 p-3 text-sm"><div><p className="font-medium">{row.instrument}</p><p className="text-xs text-slate-500">Score {number(row.score).toFixed(1)} · {number(row.weight_percentage).toFixed(1)}%</p></div><div className="text-right"><p className="font-semibold">{money(row.amount_inr)}</p><p className="text-xs text-slate-500">{row.approximate_usd === null ? "N/A" : `$${number(row.approximate_usd).toFixed(2)}`}</p></div></div>)}</div></div></section>
+                <div className="rounded-xl border border-slate-200 bg-white p-5">
+                    <h2 className="text-lg font-semibold">Global split</h2>
+                    <p className="mt-1 text-sm text-slate-500">Divides your configured Global Stocks SIP amount. Base shows the regime-adjusted strategic allocation; Final includes bounded market tilts and ₹500 execution rounding.</p>
+                    {displayableMonthly?.status === "partial" ? <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">This split comes from a partial monthly run. Unavailable markets were excluded or held at their neutral strategic weight; review Data health before investing.</p> : null}
+                    <div className="mt-4 space-y-3">{globalRows.length ? globalRows.map((row) => {
+                        const adjustment = row.adjustment_percentage === null ? null : number(row.adjustment_percentage);
+                        return <article key={row.id} className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm">
+                            <div className="flex items-start justify-between gap-4">
+                                <div><div className="flex flex-wrap items-center gap-2"><p className="font-semibold text-slate-950">{row.instrument}</p>{row.role ? <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium capitalize text-slate-600">{row.role.replaceAll("_", " ")}</span> : null}</div><p className="mt-1 text-xs text-slate-500">{row.signal_action?.replaceAll("_", " ") ?? "Legacy recommendation"}</p></div>
+                                <div className="text-right"><p className="font-semibold">{money(row.amount_inr)}</p><p className="text-xs text-slate-500">{row.approximate_usd === null ? "N/A" : `$${number(row.approximate_usd).toFixed(2)}`}</p></div>
+                            </div>
+                            <div className="mt-3 grid grid-cols-3 gap-2 rounded-lg bg-white p-3 text-xs"><div><p className="text-slate-400">Base</p><p className="mt-1 font-medium">{row.base_weight_percentage === null ? "Unavailable" : `${number(row.base_weight_percentage).toFixed(1)}%`}</p></div><div><p className="text-slate-400">Final</p><p className="mt-1 font-medium">{number(row.weight_percentage).toFixed(1)}%</p></div><div><p className="text-slate-400">Adjustment</p><p className={`mt-1 font-medium ${adjustment === null || adjustment === 0 ? "text-slate-600" : adjustment > 0 ? "text-emerald-700" : "text-red-700"}`}>{adjustment === null ? "Unavailable" : `${adjustment > 0 ? "+" : ""}${adjustment.toFixed(1)} pp`}</p></div></div>
+                            <p className="mt-3 text-xs leading-5 text-slate-600">{row.reason ?? `Legacy row · score ${number(row.score).toFixed(1)}`}</p>
+                        </article>;
+                    }) : <p className="rounded-lg bg-slate-50 p-4 text-sm text-slate-500">{displayableMonthly ? "No Global split rows were published for this monthly run." : `No current published monthly split is available for ${currentMonthKey}.`}</p>}</div>
+                </div></section>
 
             <section className="mt-6 grid gap-6 lg:grid-cols-2"><div className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="text-lg font-semibold">Alerts</h2><div className="mt-4 space-y-3">{alertRows.length ? alertRows.map((alert) => <article key={alert.id} className={`rounded-lg border p-4 ${alert.acknowledged_at ? "border-slate-200 bg-slate-50" : "border-amber-200 bg-amber-50"}`}><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{alert.alert_type} · {alert.asset}</p><h3 className="mt-1 font-semibold">{alert.title}</h3></div><span className="text-xs text-slate-500">{formatDate(alert.created_at)}</span></div><p className="mt-2 text-sm text-slate-600">{alert.message}</p><p className="mt-2 text-sm font-medium text-slate-800">{alert.recommended_action}</p>{!alert.acknowledged_at && <form action={acknowledgeSignalAlert} className="mt-3"><input type="hidden" name="alert_id" value={alert.id} /><button className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-900">Acknowledge</button></form>}</article>) : <p className="text-sm text-slate-500">No alerts have been published.</p>}</div></div>
                 <div className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="text-lg font-semibold">Data health</h2><div className="mt-4 space-y-3">{latestIssues.length ? latestIssues.map((issue, index) => <div key={`${issue.source}-${index}`} className={`rounded-lg border p-3 text-sm ${issue.severity === "error" ? "border-red-200 bg-red-50 text-red-800" : "border-amber-200 bg-amber-50 text-amber-800"}`}><p className="font-semibold">{issue.source ?? "Unknown source"}</p><p className="mt-1">{issue.message}</p></div>) : <p className="rounded-lg bg-emerald-50 p-4 text-sm text-emerald-800">No data issues were recorded in the latest run.</p>}</div></div></section>
@@ -228,6 +260,32 @@ function objectValue(value: unknown): Record<string, unknown> {
     return value && typeof value === "object" && !Array.isArray(value)
         ? value as Record<string, unknown>
         : {};
+}
+
+function StrategicPolicySignals({ scores }: { scores: MarketScore[] }) {
+    return <div className="rounded-xl border border-blue-200 bg-blue-50/40 p-5">
+        <div><h2 className="text-lg font-semibold">Strategic allocation signals</h2><p className="mt-1 text-sm text-slate-600">Portfolio-policy decisions based on allocation gaps, macro regime and configured floors—not price momentum or valuation.</p></div>
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">{scores.map((score) => {
+            const metrics = objectValue(score.metrics);
+            const rawReasons = Array.isArray(metrics.policy_reasons) ? metrics.policy_reasons : [];
+            const reasons = rawReasons.filter((reason): reason is string => typeof reason === "string");
+            const current = metrics.current_percentage === null || metrics.current_percentage === undefined ? null : number(metrics.current_percentage);
+            const target = metrics.target_percentage === null || metrics.target_percentage === undefined ? null : number(metrics.target_percentage);
+            const gap = metrics.target_gap_percentage_points === null || metrics.target_gap_percentage_points === undefined ? null : number(metrics.target_gap_percentage_points);
+            const floor = number(metrics.configured_floor_inr);
+            const badge = score.action === "TOP_UP" ? "bg-emerald-100 text-emerald-800" : score.action === "ABOVE_TARGET" ? "bg-amber-100 text-amber-800" : score.actionable ? "bg-blue-100 text-blue-800" : "bg-slate-100 text-slate-600";
+            return <article key={score.id} className="rounded-xl border border-blue-100 bg-white p-4">
+                <div className="flex items-start justify-between gap-4"><div><p className="font-semibold text-slate-950">{score.name}</p><p className="mt-1 text-xs text-slate-500">Strategic policy · {String(metrics.macro_regime ?? "UNKNOWN")} regime</p></div><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${badge}`}>{score.actionable ? score.action.replaceAll("_", " ") : "NO RECOMMENDATION"}</span></div>
+                <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4"><PolicyMetric label="Current" value={current === null ? "Unavailable" : `${current.toFixed(1)}%`} /><PolicyMetric label="Target" value={target === null ? "Unavailable" : `${target.toFixed(1)}%`} /><PolicyMetric label="Gap" value={gap === null ? "Unavailable" : `${gap > 0 ? "+" : ""}${gap.toFixed(1)} pp`} /><PolicyMetric label="Priority" value={number(score.final_score).toFixed(1)} /></div>
+                <div className="mt-4 flex flex-wrap gap-2 text-xs"><span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">Policy inputs {(number(score.data_coverage) * 100).toFixed(0)}%</span><span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">Minimum contribution {floor > 0 ? money(floor) : "None"}</span><span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">Price session not applicable</span></div>
+                {reasons.length ? <ul className="mt-4 space-y-1.5 text-sm text-slate-600">{reasons.map((reason) => <li key={reason}>• {reason}</li>)}</ul> : null}
+            </article>;
+        })}</div>
+    </div>;
+}
+
+function PolicyMetric({ label, value }: { label: string; value: string }) {
+    return <div className="rounded-lg bg-slate-50 p-3"><p className="text-xs text-slate-400">{label}</p><p className="mt-1 font-semibold text-slate-800">{value}</p></div>;
 }
 
 function MarketScoresTable({ scores }: { scores: MarketScore[] }) {
