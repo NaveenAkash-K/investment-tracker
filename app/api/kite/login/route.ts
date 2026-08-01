@@ -3,8 +3,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireKiteServerConfiguration } from "@/lib/kite/config";
 
-export const dynamic = "force-dynamic";
-
 function swingRedirect(request: NextRequest, type: "success" | "error", message: string) {
     const url = new URL("/swing-lab", request.url);
     url.searchParams.set(type, message);
@@ -45,4 +43,3 @@ export async function GET(request: NextRequest) {
     response.headers.set("Cache-Control", "no-store");
     return response;
 }
-

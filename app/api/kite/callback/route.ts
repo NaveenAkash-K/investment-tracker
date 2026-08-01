@@ -5,8 +5,6 @@ import { requireKiteServerConfiguration } from "@/lib/kite/config";
 import { encryptKiteAccessToken } from "@/lib/kite/crypto";
 import { getNextKiteSessionExpiry } from "@/lib/kite/session";
 
-export const dynamic = "force-dynamic";
-
 type KiteTokenPayload = {
     status?: string;
     message?: string;
@@ -119,4 +117,3 @@ export async function GET(request: NextRequest) {
         return swingRedirect(request, "error", `Kite connection failed: ${message}`);
     }
 }
-

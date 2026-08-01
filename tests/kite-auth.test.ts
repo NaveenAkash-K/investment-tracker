@@ -68,6 +68,6 @@ test("Kite routes only authenticate and exchange a session token", () => {
     const callbackRoute = readFileSync(new URL("../app/api/kite/callback/route.ts", import.meta.url), "utf8");
     assert.match(loginRoute, /redirect_params/);
     assert.match(callbackRoute, /api\.kite\.trade\/session\/token/);
+    assert.doesNotMatch(`${loginRoute}\n${callbackRoute}`, /export const dynamic/);
     assert.doesNotMatch(`${loginRoute}\n${callbackRoute}`, /place_order|\/orders|cancel_order|modify_order/);
 });
-
