@@ -6,7 +6,7 @@ import { StatusBanner } from "@/components/status-banner";
 import { FormSubmitButton } from "@/components/form-submit-button";
 import { AnalyzerContractStatus } from "@/components/analyzer-contract-status";
 import { AnalyzerDeliveryAlerts, type AnalyzerDelivery } from "@/components/analyzer-delivery-alerts";
-import { isDisplayableMonthlySignalRun, isUsableMonthlySignalRun } from "@/lib/analyzer-contract";
+import { isDisplayableMonthlySignalRun, isSupportedAnalyzerContract, isUsableMonthlySignalRun } from "@/lib/analyzer-contract";
 import { getIndiaDate, getIndiaMonthKey, getIndiaMonthStart, getLatestExpectedDailyRunDate } from "@/lib/performance";
 import { resolveAnalyzerDelivery } from "../analyzer-deliveries/actions";
 import { acknowledgeSignalAlert, saveSignalDecision } from "./actions";
@@ -125,6 +125,15 @@ export default async function MarketIntelligencePage({ searchParams }: { searchP
 
     const runs = (runsResult.data ?? []) as SignalRun[];
     const latestRun = runs[0];
+    const historicalRunCandidates = latestRun
+        ? runs.filter((run) => (
+            run.id !== latestRun.id
+            && run.run_type === latestRun.run_type
+            && ["successful", "partial"].includes(run.status)
+            && (run.publication_status ?? "published") === "published"
+            && isSupportedAnalyzerContract(run.contract_version)
+        )).slice(0, 12)
+        : [];
     const currentMonthKey = getIndiaMonthStart().slice(0, 7);
     const mostRecentMonthly = runs.find((run) => run.run_type === "monthly");
     const currentMonthAttempt = runs.find(
@@ -159,7 +168,12 @@ export default async function MarketIntelligencePage({ searchParams }: { searchP
             }, getIndiaMonthKey(run.as_of))
         ))
         : undefined;
-    const runIds = [latestRun?.id, latestMonthly?.id, previousMonthly?.id].filter(Boolean) as string[];
+    const runIds = Array.from(new Set([
+        latestRun?.id,
+        latestMonthly?.id,
+        previousMonthly?.id,
+        ...historicalRunCandidates.map((run) => run.id),
+    ].filter(Boolean))) as string[];
     const monthlyRunIds = [latestMonthly?.id, previousMonthly?.id].filter(Boolean) as string[];
 
     const [scoresResult, sipResult, globalResult, alertsResult, categoriesResult, performanceResult, deliveriesResult] = await Promise.all([
@@ -174,6 +188,16 @@ export default async function MarketIntelligencePage({ searchParams }: { searchP
 
     const secondaryError = scoresResult.error || sipResult.error || globalResult.error || alertsResult.error || categoriesResult.error || performanceResult.error || deliveriesResult.error;
     const scores = ((scoresResult.data ?? []) as MarketScore[]).filter((score) => score.run_id === latestRun?.id).sort((a, b) => number(b.final_score) - number(a.final_score));
+    const scoresByRun = new Map<string, MarketScore[]>();
+    for (const score of (scoresResult.data ?? []) as MarketScore[]) {
+        scoresByRun.set(score.run_id, [...(scoresByRun.get(score.run_id) ?? []), score]);
+    }
+    const lastValidRun = historicalRunCandidates.find((run) => (
+        (scoresByRun.get(run.id) ?? []).some((score) => score.actionable && objectValue(score.metrics).signal_type !== "strategic_policy")
+    ));
+    const lastValidScores = (scoresByRun.get(lastValidRun?.id ?? "") ?? [])
+        .filter((score) => objectValue(score.metrics).signal_type !== "strategic_policy")
+        .sort((a, b) => number(b.final_score) - number(a.final_score));
     const policyScores = scores.filter((score) => objectValue(score.metrics).signal_type === "strategic_policy");
     const pricedMarketScores = scores.filter((score) => objectValue(score.metrics).signal_type !== "strategic_policy");
     const allSipRows = (sipResult.data ?? []) as SipRecommendation[];
@@ -197,6 +221,7 @@ export default async function MarketIntelligencePage({ searchParams }: { searchP
     const latestIssues = latestRun ? issues(latestRun.data_issues) : [];
     const expectedDailyRunDate = getLatestExpectedDailyRunDate(8, 0, 120);
     const dailyHeartbeatMissed = !latestRun || getIndiaDate(new Date(latestRun.as_of)) < expectedDailyRunDate;
+    const currentActionableMarketCount = scores.filter((score) => score.actionable && objectValue(score.metrics).signal_type !== "strategic_policy").length;
 
     return <main><div className="mx-auto max-w-7xl px-4 py-8">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -220,6 +245,12 @@ export default async function MarketIntelligencePage({ searchParams }: { searchP
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><h2 className="text-lg font-semibold">Current market signals</h2><p className="mt-1 text-sm text-slate-500">Markets with insufficient input coverage or stale prices are blocked instead of receiving a neutral recommendation.</p></div><span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">USD/INR {latestRun.usd_inr_rate ? number(latestRun.usd_inr_rate).toFixed(2) : "N/A"}</span></div>
                 <MarketScoresTable scores={pricedMarketScores} />
             </section>
+
+            {currentActionableMarketCount === 0 && lastValidRun ? <section className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-5 text-amber-950" role="status">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"><div><h2 className="font-semibold">Current run has no actionable market recommendations</h2><p className="mt-1 text-sm leading-6">The previous published run below is shown for read-only review only. It is stale and must not be treated as today&apos;s signal or used to arm Paper Auto.</p></div><span className="shrink-0 rounded-full bg-white/70 px-3 py-1 text-xs font-semibold uppercase tracking-wide">Read-only · stale</span></div>
+                <div className="mt-4 grid gap-3 text-sm sm:grid-cols-3"><div><p className="text-xs uppercase tracking-wide text-amber-800/70">Previous run</p><p className="mt-1 font-semibold">{lastValidRun.run_type.toUpperCase()}</p></div><div><p className="text-xs uppercase tracking-wide text-amber-800/70">Published</p><p className="mt-1 font-semibold">{formatDate(lastValidRun.as_of)}</p></div><div><p className="text-xs uppercase tracking-wide text-amber-800/70">Actionable markets</p><p className="mt-1 font-semibold">{lastValidScores.filter((score) => score.actionable).length}</p></div></div>
+                <div className="mt-4 overflow-hidden rounded-lg border border-amber-200 bg-white"><MarketScoresTable scores={lastValidScores} caption="Previous valid market recommendations, shown read-only with a stale warning" /></div>
+            </section> : null}
 
             {policyScores.length ? <section className="mt-6"><StrategicPolicySignals scores={policyScores} /></section> : null}
 
@@ -288,9 +319,9 @@ function PolicyMetric({ label, value }: { label: string; value: string }) {
     return <div className="rounded-lg bg-slate-50 p-3"><p className="text-xs text-slate-400">{label}</p><p className="mt-1 font-semibold text-slate-800">{value}</p></div>;
 }
 
-function MarketScoresTable({ scores }: { scores: MarketScore[] }) {
+function MarketScoresTable({ scores, caption = "Latest market scores, valuation proxies, completed price sessions and data coverage" }: { scores: MarketScore[]; caption?: string }) {
     return <div className="mt-5 overflow-x-auto"><table className="w-full min-w-[1260px] text-left text-sm">
-        <caption className="sr-only">Latest market scores, valuation proxies, completed price sessions and data coverage</caption>
+        <caption className="sr-only">{caption}</caption>
         <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-4 py-3">Market</th><th className="px-4 py-3 text-right">Final</th><th className="px-4 py-3 text-right">Change</th><th className="px-4 py-3">Valuation proxy</th><th className="px-4 py-3 text-right">Technical</th><th className="px-4 py-3 text-right">Portfolio fit</th><th className="px-4 py-3 text-right">Safety</th><th className="px-4 py-3 text-right">Data coverage</th><th className="px-4 py-3">Posture</th><th className="px-4 py-3">Price session</th></tr></thead>
         <tbody className="divide-y divide-slate-100">{scores.map((score) => {
             const metrics = objectValue(score.metrics);
