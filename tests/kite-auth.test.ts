@@ -92,6 +92,8 @@ test("Personal Free GTT Assisted stays separate, explicit and same-session", () 
     assert.match(swingPage, /Handled by Zerodha GTT/);
     assert.match(swingPage, /Unavailable · Personal Free/);
     assert.match(swingPage, /disabled=\{!kiteConnected \|\| controls\.market_data_plan !== "connect"\}/);
+    assert.match(swingPage, /name="live_max_deployed_inr"[^>]*min=\{500\} step=\{500\}/);
+    assert.match(swingPage, /name="live_daily_loss_limit_inr"[^>]*min=\{10\} step=\{10\}/);
 });
 
 test("Paper Auto migration remains simulated, idempotent and service-role controlled", () => {
