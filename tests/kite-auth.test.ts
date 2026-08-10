@@ -75,6 +75,25 @@ test("credential rotation is not an execution-readiness gate", () => {
     assert.doesNotMatch(swingPage, /Exposed service-role key was rotated/);
 });
 
+test("Personal Free GTT Assisted stays separate, explicit and same-session", () => {
+    const migration = readFileSync(
+        new URL("../supabase/migrations/202608100004_personal_free_gtt_assisted.sql", import.meta.url),
+        "utf8",
+    );
+    const swingPage = readFileSync(new URL("../app/(app)/swing-lab/page.tsx", import.meta.url), "utf8");
+    assert.match(migration, /gtt_assisted_enabled boolean not null default false/);
+    assert.match(migration, /Current LTP must still be below the entry trigger/);
+    assert.match(migration, /time '09:20'[\s\S]*time '15:05'/);
+    assert.match(migration, /time '15:20'/);
+    assert.match(migration, /target_r_multiple numeric\(8,4\) not null default 2/);
+    assert.match(migration, /grant execute on function public\.create_swing_gtt_assisted_entry\(uuid,numeric\) to authenticated/);
+    assert.match(migration, /grant execute on function public\.record_swing_gtt_assisted_state[\s\S]*?to service_role/);
+    assert.doesNotMatch(migration, /grant execute on function public\.record_swing_gtt_assisted_state[^;]*to authenticated/);
+    assert.match(swingPage, /Handled by Zerodha GTT/);
+    assert.match(swingPage, /Unavailable · Personal Free/);
+    assert.match(swingPage, /disabled=\{!kiteConnected \|\| controls\.market_data_plan !== "connect"\}/);
+});
+
 test("Paper Auto migration remains simulated, idempotent and service-role controlled", () => {
     const migration = readFileSync(
         new URL("../supabase/migrations/202608020003_swing_paper_auto.sql", import.meta.url),

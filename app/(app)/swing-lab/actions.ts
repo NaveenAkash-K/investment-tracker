@@ -136,6 +136,40 @@ export async function configureSwingLiveMode(formData: FormData) {
             : "Swing Lab returned to Advisory mode. Existing broker protection continues.");
 }
 
+export async function configureSwingGttAssisted(formData: FormData) {
+    const enabled = required(formData, "action") === "enable";
+    await execute(async () => {
+        const supabase = await authenticatedClient();
+        const { error } = await supabase.rpc("configure_swing_gtt_assisted", {
+            p_enabled: enabled,
+        });
+        if (error) throw new Error(error.message);
+    }, enabled
+        ? "Personal Free GTT Assisted is enabled. Each entry still requires your explicit approval."
+        : "GTT Assisted is disabled. Any submitted entry trigger is being cancelled; existing position protection remains active.");
+}
+
+export async function createSwingGttAssistedEntry(formData: FormData) {
+    await execute(async () => {
+        const supabase = await authenticatedClient();
+        const { error } = await supabase.rpc("create_swing_gtt_assisted_entry", {
+            p_candidate_id: required(formData, "candidate_id"),
+            p_current_ltp: number(formData, "current_ltp"),
+        });
+        if (error) throw new Error(error.message);
+    }, "Entry GTT approved. The static-IP worker will submit it after its final fail-closed checks.");
+}
+
+export async function cancelSwingGttAssistedEntry(formData: FormData) {
+    await execute(async () => {
+        const supabase = await authenticatedClient();
+        const { error } = await supabase.rpc("cancel_swing_gtt_assisted_entry", {
+            p_entry_id: required(formData, "entry_id"),
+        });
+        if (error) throw new Error(error.message);
+    }, "Entry GTT cancellation requested. Wait for the VPS and Kite status to confirm cancellation.");
+}
+
 export async function decideSwingAssistedIntent(formData: FormData) {
     const action = required(formData, "action");
     await execute(async () => {
