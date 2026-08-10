@@ -15,10 +15,15 @@ import { maskBrokerUserId } from "@/lib/kite/session";
 import {
     confirmSwingEntry,
     confirmSwingExit,
+    clearSwingRiskControl,
+    configureSwingLiveMode,
     configureSwingPaperAuto,
+    decideSwingAssistedIntent,
     disconnectKiteAccount,
     reconcileSwingCorporateAction,
     saveSwingSettings,
+    saveSwingLiveReadiness,
+    setSwingEmergencyStop,
     skipSwingCandidate,
     updateSwingStop,
 } from "./actions";
@@ -146,6 +151,83 @@ type AutomationControls = {
     emergency_stop_active: boolean;
     paper_slippage_bps: number | string;
     paper_max_new_entries_per_day: number;
+    assisted_live_unlocked: boolean;
+    live_auto_unlocked: boolean;
+    broker_execution_enabled: boolean;
+    ddpi_confirmed_at: string | null;
+    credentials_rotated_at: string | null;
+    market_data_plan: "personal" | "connect";
+    live_max_open_positions: number;
+    live_max_new_entries_per_day: number;
+    live_max_deployed_inr: number | string;
+    live_daily_loss_limit_inr: number | string;
+    live_risk_per_trade_percentage: number | string;
+    live_amber_risk_multiplier: number | string;
+};
+type LiveOrderIntent = {
+    id: string;
+    intent_purpose: "entry" | "exit" | "protective_stop" | "replace_stop" | "cancel";
+    automation_mode: "assisted_live" | "live_auto";
+    status: string;
+    approval_status: "not_required" | "pending" | "approved" | "rejected" | "expired";
+    approval_expires_at: string | null;
+    symbol: string;
+    transaction_type: "BUY" | "SELL";
+    quantity: number;
+    limit_price: number | string | null;
+    trigger_price: number | string | null;
+    requested_at: string;
+    failure_reason: string | null;
+};
+type LiveBrokerOrder = {
+    id: string;
+    intent_id: string;
+    broker_order_id: string;
+    status: string;
+    quantity: number;
+    filled_quantity: number;
+    average_price: number | string | null;
+    status_message: string | null;
+    updated_at: string;
+};
+type LiveProtection = {
+    id: string;
+    trade_id: string;
+    broker_trigger_id: string | null;
+    status: string;
+    protected_quantity: number;
+    trigger_price: number | string;
+    limit_price: number | string | null;
+    last_verified_at: string | null;
+    failure_reason: string | null;
+};
+type LiveRiskLock = {
+    id: string;
+    control_type: string;
+    reason: string;
+    activated_at: string;
+};
+type RolloutReadiness = {
+    phase7_ready: boolean;
+    phase8_ready: boolean;
+    phase9_ready: boolean;
+    live_modes_locked: boolean;
+    counts: {
+        paper_quote_sessions: number;
+        paper_entry_events: number;
+        paper_exit_events: number;
+        assisted_live_closed_trades: number;
+        active_risk_locks: number;
+    };
+    limits: {
+        max_open_positions: number;
+        max_new_entries_per_day: number;
+        max_deployed_inr: number | string;
+        daily_loss_limit_inr: number | string;
+        risk_per_trade_percentage: number | string;
+        amber_risk_multiplier: number | string;
+    };
+    checks: Array<{ key: string; passed: boolean; reason: string }>;
 };
 type PaperEvent = {
     id: string;
@@ -246,7 +328,7 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) redirect("/auth/login");
 
-    const [settingsResult, scanResult, monitorResult, candidatesResult, tradesResult, tradeEventsResult, deliveriesResult, kiteConnectionResult, kiteWorkerResult, kiteAccountResult, kiteReconciliationResult, kiteReconciliationRowsResult, automationResult, paperWorkerResult, paperEventsResult] = await Promise.all([
+    const [settingsResult, scanResult, monitorResult, candidatesResult, tradesResult, tradeEventsResult, deliveriesResult, kiteConnectionResult, kiteWorkerResult, kiteAccountResult, kiteReconciliationResult, kiteReconciliationRowsResult, automationResult, paperWorkerResult, paperEventsResult, readinessResult, liveWorkerResult, liveIntentsResult, liveOrdersResult, liveProtectionsResult, liveRiskLocksResult] = await Promise.all([
         supabase.from("swing_lab_settings").select("trading_capital_inr, risk_per_trade_percentage, max_open_positions, max_sector_positions, minimum_setup_score, paper_mode").eq("user_id", user.id).maybeSingle(),
         supabase.from("swing_scan_runs").select("id, as_of, status, model_version, contract_version, publication_status, market_regime, raw_market_regime, regime_confirmed, regime_reason, regime_confirmation_reason, benchmark_symbol, benchmark_close, benchmark_sma50, benchmark_sma200, benchmark_distance_200_percentage, benchmark_price_date, expected_price_session, session_matches_expected, session_state, breadth_percentage, breadth_available, breadth_coverage_percentage, universe_size, eligible_size, published_size, effective_minimum_score, effective_risk_percentage, scan_blocked_reason, gate_counts, data_issues").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
         supabase.from("swing_monitor_runs").select("id, as_of, status, contract_version, price_observed_at, candidates_requested, positions_requested, candidates_evaluated, positions_evaluated, candidates_checked, positions_checked, notification_count, failed_candidate_ids, failed_trade_ids, data_issues").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
@@ -259,14 +341,20 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
         supabase.from("swing_broker_account_snapshots").select("observed_at, account_status, available_cash, utilised_debits, net_equity, holdings_count, positions_count, orders_count, trades_count").eq("user_id", user.id).order("observed_at", { ascending: false }).limit(1).maybeSingle(),
         supabase.from("swing_reconciliation_runs").select("id, reconciliation_status, tracker_positions, broker_positions, matched_positions, mismatch_positions, broker_only_positions, checked_at, details").eq("user_id", user.id).order("checked_at", { ascending: false }).limit(1).maybeSingle(),
         supabase.from("swing_position_reconciliations").select("reconciliation_run_id, symbol, reconciliation_status, tracker_quantity, broker_quantity, tracker_average_price, broker_average_price").eq("user_id", user.id).order("checked_at", { ascending: false }).limit(100),
-        supabase.from("swing_automation_controls").select("automation_mode, new_entries_enabled, armed_nse_session, emergency_stop_active, paper_slippage_bps, paper_max_new_entries_per_day").eq("user_id", user.id).maybeSingle(),
+        supabase.from("swing_automation_controls").select("automation_mode, new_entries_enabled, armed_nse_session, emergency_stop_active, paper_slippage_bps, paper_max_new_entries_per_day, assisted_live_unlocked, live_auto_unlocked, broker_execution_enabled, ddpi_confirmed_at, credentials_rotated_at, market_data_plan, live_max_open_positions, live_max_new_entries_per_day, live_max_deployed_inr, live_daily_loss_limit_inr, live_risk_per_trade_percentage, live_amber_risk_multiplier").eq("user_id", user.id).maybeSingle(),
         supabase.from("swing_worker_heartbeats").select("worker_id, worker_version, observed_public_ip, worker_status, execution_mode, kite_session_healthy, quote_stream_healthy, reconciliation_healthy, heartbeat_at, details").eq("user_id", user.id).eq("execution_mode", "paper_auto").order("heartbeat_at", { ascending: false }).limit(1).maybeSingle(),
         supabase.from("swing_paper_events").select("id, event_type, symbol, quantity, price, fees_inr, reason, observed_at").eq("user_id", user.id).order("observed_at", { ascending: false }).limit(20),
+        supabase.rpc("get_swing_rollout_readiness"),
+        supabase.from("swing_worker_heartbeats").select("worker_id, worker_version, observed_public_ip, worker_status, execution_mode, kite_session_healthy, quote_stream_healthy, reconciliation_healthy, heartbeat_at, details").eq("user_id", user.id).in("execution_mode", ["assisted_live", "live_auto"]).order("heartbeat_at", { ascending: false }).limit(1).maybeSingle(),
+        supabase.from("swing_order_intents").select("id, intent_purpose, automation_mode, status, approval_status, approval_expires_at, symbol, transaction_type, quantity, limit_price, trigger_price, requested_at, failure_reason").eq("user_id", user.id).in("automation_mode", ["assisted_live", "live_auto"]).order("requested_at", { ascending: false }).limit(30),
+        supabase.from("swing_broker_orders").select("id, intent_id, broker_order_id, status, quantity, filled_quantity, average_price, status_message, updated_at").eq("user_id", user.id).order("updated_at", { ascending: false }).limit(30),
+        supabase.from("swing_protective_orders").select("id, trade_id, broker_trigger_id, status, protected_quantity, trigger_price, limit_price, last_verified_at, failure_reason").eq("user_id", user.id).order("updated_at", { ascending: false }).limit(30),
+        supabase.from("swing_risk_control_activations").select("id, control_type, reason, activated_at").eq("user_id", user.id).eq("status", "active").order("activated_at", { ascending: false }).limit(20),
     ]);
     const params = await searchParams;
-    const queryError = settingsResult.error || scanResult.error || monitorResult.error || candidatesResult.error || tradesResult.error || tradeEventsResult.error || deliveriesResult.error || kiteConnectionResult.error || kiteWorkerResult.error || kiteAccountResult.error || kiteReconciliationResult.error || kiteReconciliationRowsResult.error || automationResult.error || paperWorkerResult.error || paperEventsResult.error;
+    const queryError = settingsResult.error || scanResult.error || monitorResult.error || candidatesResult.error || tradesResult.error || tradeEventsResult.error || deliveriesResult.error || kiteConnectionResult.error || kiteWorkerResult.error || kiteAccountResult.error || kiteReconciliationResult.error || kiteReconciliationRowsResult.error || automationResult.error || paperWorkerResult.error || paperEventsResult.error || readinessResult.error || liveWorkerResult.error || liveIntentsResult.error || liveOrdersResult.error || liveProtectionsResult.error || liveRiskLocksResult.error;
     if (queryError) {
-        return <main className="mx-auto max-w-5xl px-4 py-8"><div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-800"><h1 className="font-semibold">Swing Lab migration required</h1><p className="mt-2 text-sm">{queryError.message}</p><p className="mt-2 text-xs">Apply all pending Supabase migrations through <code>202608020003_swing_paper_auto.sql</code>, then reload this page.</p></div></main>;
+        return <main className="mx-auto max-w-5xl px-4 py-8"><div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-800"><h1 className="font-semibold">Swing Lab migration required</h1><p className="mt-2 text-sm">{queryError.message}</p><p className="mt-2 text-xs">Apply all pending Supabase migrations through <code>202608100002_swing_live_execution.sql</code>, then reload this page.</p></div></main>;
     }
 
     const settings = (settingsResult.data ?? defaults) as Settings;
@@ -283,9 +371,22 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
         automation_mode: "advisory", new_entries_enabled: false,
         armed_nse_session: null, emergency_stop_active: false,
         paper_slippage_bps: 5, paper_max_new_entries_per_day: 1,
+        assisted_live_unlocked: false, broker_execution_enabled: false,
+        live_auto_unlocked: false,
+        ddpi_confirmed_at: null, credentials_rotated_at: null,
+        market_data_plan: "personal", live_max_open_positions: 1,
+        live_max_new_entries_per_day: 1, live_max_deployed_inr: 5000,
+        live_daily_loss_limit_inr: 100, live_risk_per_trade_percentage: 0.5,
+        live_amber_risk_multiplier: 0.5,
     }) as AutomationControls;
     const paperWorker = (paperWorkerResult.data ?? null) as KiteWorkerHeartbeat | null;
     const paperEvents = (paperEventsResult.data ?? []) as PaperEvent[];
+    const readiness = readinessResult.data as RolloutReadiness;
+    const liveWorker = (liveWorkerResult.data ?? null) as KiteWorkerHeartbeat | null;
+    const liveIntents = (liveIntentsResult.data ?? []) as LiveOrderIntent[];
+    const liveOrders = (liveOrdersResult.data ?? []) as LiveBrokerOrder[];
+    const liveProtections = (liveProtectionsResult.data ?? []) as LiveProtection[];
+    const liveRiskLocks = (liveRiskLocksResult.data ?? []) as LiveRiskLock[];
     const kiteConfiguration = getKiteConfigurationState();
     const candidates = (candidatesResult.data ?? []) as Candidate[];
     const trades = (tradesResult.data ?? []) as Trade[];
@@ -302,8 +403,15 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
     const paperWorkerFresh = Boolean(
         paperWorker && now.getTime() - new Date(paperWorker.heartbeat_at).getTime() <= 10 * 60_000,
     );
+    const liveWorkerFresh = Boolean(
+        liveWorker && now.getTime() - new Date(liveWorker.heartbeat_at).getTime() <= 2 * 60_000,
+    );
     const currentIndiaDate = getIndiaDate(now);
     const paperAutoArmed = automation.automation_mode === "paper_auto"
+        && automation.new_entries_enabled
+        && automation.armed_nse_session === currentIndiaDate
+        && !automation.emergency_stop_active;
+    const liveModeArmed = ["assisted_live", "live_auto"].includes(automation.automation_mode)
         && automation.new_entries_enabled
         && automation.armed_nse_session === currentIndiaDate
         && !automation.emergency_stop_active;
@@ -371,12 +479,14 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
             : null;
 
     return <main><div className="mx-auto max-w-7xl px-4 py-8">
-        <PageHeader title="Swing Lab" description="End-of-day Indian equity candidates, manual trade tracking, and read-only Kite-powered Paper Auto simulation." />
+        <PageHeader title="Swing Lab" description="End-of-day Indian equity candidates, Paper Auto validation, Assisted Live approval, and capped Live Auto execution." />
         <StatusBanner success={params.success} error={params.error} />
         <AnalyzerDeliveryAlerts deliveries={deliveryRows} returnTo="/swing-lab" resolveAction={resolveAnalyzerDelivery} />
         {latestScan ? <AnalyzerContractStatus version={latestScan.contract_version} publisher="Swing scan" /> : null}
         {latestMonitor ? <AnalyzerContractStatus version={latestMonitor.contract_version} publisher="Swing monitor" /> : null}
         <KiteConnectionCard connection={kiteConnection} configured={kiteConfiguration.configured} worker={kiteWorker} workerFresh={kiteWorkerFresh} account={kiteAccount} reconciliation={kiteReconciliation} reconciliationRows={kiteReconciliationRows} />
+        <SwingRolloutReadinessCard controls={automation} readiness={readiness} />
+        <LiveExecutionCard controls={automation} worker={liveWorker} workerFresh={liveWorkerFresh} intents={liveIntents} orders={liveOrders} protections={liveProtections} riskLocks={liveRiskLocks} today={currentIndiaDate} />
         <PaperAutoCard controls={automation} worker={paperWorker} workerFresh={paperWorkerFresh} events={paperEvents} kiteConnected={Boolean(kiteConfiguration.configured && kiteConnection?.connection_status === "connected" && kiteConnection.has_active_session)} today={currentIndiaDate} />
         {scanHeartbeatMissed ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900"><p className="font-semibold">End-of-day scan heartbeat is missing</p><p className="mt-1">No scan was published for the latest expected workflow date, {date(expectedScanDate)}. Check the GitHub Action and Tracker publication logs.</p></div> : latestScan?.status === "failed" ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">The latest end-of-day scan failed. Do not treat older candidates as newly validated.</div> : null}
         {monitorHeartbeatMissed ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900"><p className="font-semibold">Morning monitor heartbeat is missing</p><p className="mt-1">No monitor was published for the latest expected workflow date, {date(expectedMonitorDate)}. Verify open positions directly with your broker until the job recovers.</p></div> : latestMonitor?.status === "failed" ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">The latest morning monitor failed. No requested record could be evaluated from fresh data; verify candidates and stops with your broker.</div> : latestMonitor?.status === "partial" ? <div role="alert" className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">The latest morning monitor was partial. Only the explicitly evaluated records below received a fresh check.</div> : null}
@@ -433,7 +543,8 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
             <div className="flex items-end justify-between gap-4"><div><h2 className="text-xl font-semibold">{candidateEntryAllowed ? "Actionable candidates" : "Candidates for review"}</h2><p className="mt-1 text-sm text-slate-500">{candidateEntryAllowed ? "Review the conditional entry, maximum acceptable price, stop and expiry before acting." : "Older candidates remain visible for context, but entry confirmation is disabled until scan validity is restored."}</p></div><span className="text-sm text-slate-500">{activeCandidates.length} active</span></div>
             {candidateEntryBlockedReason ? <div role="alert" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><p className="font-semibold">New entries are temporarily disabled</p><p className="mt-1">{candidateEntryBlockedReason}</p></div> : null}
             {paperAutoArmed ? <div role="status" className="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900"><p className="font-semibold">Paper Auto is watching eligible candidates</p><p className="mt-1">Manual entry confirmation is disabled while armed to prevent duplicate tracking. No Kite order will be placed.</p></div> : null}
-            {activeCandidates.length ? <div className="mt-4 grid gap-4 xl:grid-cols-2">{activeCandidates.map((candidate) => <CandidateCard key={candidate.id} candidate={candidate} settings={settings} today={currentIndiaDate} entryAllowed={candidateEntryAllowed && !paperAutoArmed} entryBlockedReason={paperAutoArmed ? "Paper Auto is armed and watching this candidate for a fresh live trigger crossing." : candidateEntryBlockedReason} carriedForward={Boolean(latestScan && candidate.scan_id !== latestScan.id)} />)}</div> : <div className="mt-4 rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">No active candidates. “No trade” is expected when the hard gates or setup quality are not satisfied.</div>}
+            {liveModeArmed ? <div role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900"><p className="font-semibold">{automation.automation_mode === "live_auto" ? "Live Auto" : "Assisted Live"} is armed</p><p className="mt-1">Manual entry confirmation is disabled to prevent duplicate positions. Broker submission still requires every database and VPS safety gate.</p></div> : null}
+            {activeCandidates.length ? <div className="mt-4 grid gap-4 xl:grid-cols-2">{activeCandidates.map((candidate) => <CandidateCard key={candidate.id} candidate={candidate} settings={settings} today={currentIndiaDate} entryAllowed={candidateEntryAllowed && !paperAutoArmed && !liveModeArmed} entryBlockedReason={paperAutoArmed ? "Paper Auto is armed and watching this candidate for a fresh live trigger crossing." : liveModeArmed ? "A live execution mode is armed and owns candidate entry processing." : candidateEntryBlockedReason} carriedForward={Boolean(latestScan && candidate.scan_id !== latestScan.id)} />)}</div> : <div className="mt-4 rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">No active candidates. “No trade” is expected when the hard gates or setup quality are not satisfied.</div>}
         </section>
 
         <section className="mt-8">
@@ -479,6 +590,111 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
     </div></main>;
 }
 
+function LiveExecutionCard({ controls, worker, workerFresh, intents, orders, protections, riskLocks, today }: {
+    controls: AutomationControls;
+    worker: KiteWorkerHeartbeat | null;
+    workerFresh: boolean;
+    intents: LiveOrderIntent[];
+    orders: LiveBrokerOrder[];
+    protections: LiveProtection[];
+    riskLocks: LiveRiskLock[];
+    today: string;
+}) {
+    const mode = controls.automation_mode;
+    const liveMode = mode === "assisted_live" || mode === "live_auto";
+    const armed = liveMode && controls.new_entries_enabled && controls.armed_nse_session === today && !controls.emergency_stop_active;
+    const pendingApprovals = intents.filter((intent) => intent.automation_mode === "assisted_live" && intent.status === "pending" && intent.approval_status === "pending");
+    const activeOrders = orders.filter((order) => !["COMPLETE", "CANCELLED", "REJECTED"].includes(order.status.toUpperCase()));
+    const unhealthyProtection = protections.filter((protection) => ["failed", "rejected"].includes(protection.status));
+    const status = armed ? `${mode === "live_auto" ? "Live Auto" : "Assisted Live"} armed` : liveMode ? "New entries paused" : "Not armed";
+    return <section className="mb-6 rounded-xl border border-slate-200 bg-white p-5" aria-labelledby="live-execution-title">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="flex gap-3"><div className="rounded-lg bg-red-50 p-2 text-red-700"><Activity className="h-5 w-5" /></div><div><h2 id="live-execution-title" className="text-lg font-semibold">Assisted Live and Live Auto</h2><p className="mt-1 text-sm text-slate-500">Kite orders are submitted only by the static-IP VPS after database approval, runtime revalidation and idempotent recovery.</p></div></div>
+            <span className={`w-fit rounded-full border px-3 py-1 text-xs font-semibold uppercase ${armed ? "border-red-200 bg-red-50 text-red-800" : "border-slate-200 bg-slate-50 text-slate-700"}`}>{status}</span>
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <SmallMetric label="VPS live worker" value={!worker ? "Not installed" : !workerFresh ? "Heartbeat stale" : worker.worker_status} />
+            <SmallMetric label="Quote health" value={workerFresh && worker?.quote_stream_healthy ? "Fresh" : "Unavailable"} />
+            <SmallMetric label="Assisted Live" value={controls.assisted_live_unlocked && controls.broker_execution_enabled ? "Unlocked" : "Locked"} />
+            <SmallMetric label="Live Auto" value={controls.live_auto_unlocked && controls.broker_execution_enabled ? "Unlocked" : "Locked"} />
+            <SmallMetric label="Active protection" value={`${protections.filter((row) => row.status === "active").length} GTT`} />
+        </div>
+        {!controls.broker_execution_enabled ? <div role="status" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><p className="font-semibold">Broker execution is intentionally locked</p><p className="mt-1">The Phase 8/9 code is present, but no live order can be claimed until the service-role rollout lock and VPS write gate are both enabled during configuration.</p></div> : null}
+        {unhealthyProtection.length ? <div role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900"><p className="font-semibold">Protective order attention required</p><p className="mt-1">{unhealthyProtection.length} protective order record(s) are failed or rejected. New entries should remain blocked until broker protection is restored.</p></div> : null}
+        {riskLocks.length ? <div role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900"><p className="font-semibold">Active execution risk locks</p><div className="mt-2 space-y-2">{riskLocks.map((lock) => <div key={lock.id} className="flex flex-col gap-2 rounded-md bg-white/70 p-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-medium">{lock.control_type.replaceAll("_", " ")}</p><p className="text-xs">{lock.reason} · {dateTime(lock.activated_at)}</p></div><form action={clearSwingRiskControl}><input type="hidden" name="activation_id" value={lock.id} /><ConfirmSubmitButton confirmation="Clear this risk lock after verifying the underlying broker/worker issue? This will not re-arm entries." pendingText="Clearing lock...">Clear after review</ConfirmSubmitButton></form></div>)}</div></div> : null}
+
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <div className="rounded-lg border border-slate-200 p-4"><h3 className="font-semibold">Assisted Live</h3><p className="mt-1 text-sm text-slate-600">A valid trigger creates a five-minute proposal. You approve it; the VPS then rechecks price, risk, funds, reconciliation and duplicates before submission.</p><form action={configureSwingLiveMode} className="mt-3"><input type="hidden" name="action" value="arm" /><input type="hidden" name="mode" value="assisted_live" /><ConfirmSubmitButton confirmation="Arm Assisted Live for today? Each entry still requires your approval and final VPS revalidation." pendingText="Arming Assisted Live..." disabled={!controls.assisted_live_unlocked || !controls.broker_execution_enabled}>Arm Assisted Live today</ConfirmSubmitButton></form></div>
+            <div className="rounded-lg border border-slate-200 p-4"><h3 className="font-semibold">Capped Live Auto</h3><p className="mt-1 text-sm text-slate-600">Uses the same trigger and revalidation path without per-entry approval, capped at one position, one entry/day, {money(controls.live_max_deployed_inr)} deployed and {money(controls.live_daily_loss_limit_inr)} daily lock.</p><form action={configureSwingLiveMode} className="mt-3"><input type="hidden" name="action" value="arm" /><input type="hidden" name="mode" value="live_auto" /><ConfirmSubmitButton confirmation="Arm Live Auto for today's NSE session? Qualified orders may be sent without another approval." pendingText="Arming Live Auto..." className="border-red-200 text-red-700 hover:bg-red-50" disabled={!controls.live_auto_unlocked || !controls.broker_execution_enabled}>Arm Live Auto today</ConfirmSubmitButton></form></div>
+        </div>
+        {liveMode ? <div className="mt-3 flex flex-col gap-3 sm:flex-row"><form action={configureSwingLiveMode}><input type="hidden" name="action" value="pause" /><input type="hidden" name="mode" value={mode} /><ConfirmSubmitButton confirmation="Pause new live entries? Existing reconciliation and broker-side protection will continue." pendingText="Pausing live entries...">Pause new entries</ConfirmSubmitButton></form><form action={configureSwingLiveMode}><input type="hidden" name="action" value="advisory" /><input type="hidden" name="mode" value={mode} /><ConfirmSubmitButton confirmation="Return to Advisory mode? Existing broker-side protection will remain active." pendingText="Returning to Advisory...">Use Advisory mode</ConfirmSubmitButton></form></div> : null}
+
+        <details open={pendingApprovals.length > 0} className="mt-4 rounded-lg border border-slate-200 p-4"><summary className="cursor-pointer text-sm font-semibold">Assisted Live approvals ({pendingApprovals.length})</summary>{pendingApprovals.length ? <div className="mt-3 space-y-3">{pendingApprovals.map((intent) => <div key={intent.id} className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm"><div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-semibold">{intent.transaction_type} {intent.quantity} {intent.symbol}</p><p className="mt-1 text-xs text-slate-600">Limit {intent.limit_price === null ? "N/A" : decimalMoney(intent.limit_price)} · expires {dateTime(intent.approval_expires_at)}</p></div><div className="flex gap-2"><form action={decideSwingAssistedIntent}><input type="hidden" name="intent_id" value={intent.id} /><input type="hidden" name="action" value="approve" /><ConfirmSubmitButton confirmation={`Approve ${intent.transaction_type} ${intent.quantity} ${intent.symbol}? The VPS will revalidate before submission.`} pendingText="Approving...">Approve</ConfirmSubmitButton></form><form action={decideSwingAssistedIntent}><input type="hidden" name="intent_id" value={intent.id} /><input type="hidden" name="action" value="reject" /><ConfirmSubmitButton confirmation="Reject this proposal? No broker order will be submitted." pendingText="Rejecting..." className="border-red-200 text-red-700 hover:bg-red-50">Reject</ConfirmSubmitButton></form></div></div></div>)}</div> : <p className="mt-3 text-sm text-slate-500">No Assisted Live proposal is waiting for approval.</p>}</details>
+        <details className="mt-3 rounded-lg border border-slate-200 p-4"><summary className="cursor-pointer text-sm font-semibold">Broker timeline ({orders.length} orders · {activeOrders.length} active)</summary>{orders.length ? <div className="mt-3 space-y-2">{orders.map((order) => <div key={order.id} className="flex flex-col gap-1 rounded-lg bg-slate-50 p-3 text-sm sm:flex-row sm:items-center sm:justify-between"><span><strong>{order.broker_order_id}</strong> · {order.status} · {order.filled_quantity}/{order.quantity} filled</span><span className="text-xs text-slate-500">{order.average_price === null ? "No fill" : decimalMoney(order.average_price)} · {dateTime(order.updated_at)}</span></div>)}</div> : <p className="mt-3 text-sm text-slate-500">No live broker order has been recorded.</p>}</details>
+    </section>;
+}
+
+function SwingRolloutReadinessCard({ controls, readiness }: {
+    controls: AutomationControls;
+    readiness: RolloutReadiness;
+}) {
+    const phaseStatus = (ready: boolean, locked: boolean) => ready ? "Ready" : locked ? "Locked" : "Collecting evidence";
+    return <section className="mb-6 rounded-xl border border-slate-200 bg-white p-5" aria-labelledby="rollout-readiness-title">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="flex gap-3">
+                <div className="rounded-lg bg-emerald-50 p-2 text-emerald-700"><ShieldCheck className="h-5 w-5" /></div>
+                <div><h2 id="rollout-readiness-title" className="text-lg font-semibold">Execution rollout readiness</h2><p className="mt-1 text-sm text-slate-500">Forward Paper Auto evidence and live prerequisites. This scorecard cannot unlock broker execution.</p></div>
+            </div>
+            <span className={`w-fit rounded-full border px-3 py-1 text-xs font-semibold uppercase ${controls.broker_execution_enabled ? "border-red-200 bg-red-50 text-red-800" : "border-slate-200 bg-slate-50 text-slate-700"}`}>{controls.broker_execution_enabled ? "VPS execution enabled" : "Live orders locked"}</span>
+        </div>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <SmallMetric label="Phase 7 · Paper validation" value={phaseStatus(readiness.phase7_ready, false)} />
+            <SmallMetric label="Phase 8 · Assisted Live" value={phaseStatus(readiness.phase8_ready, readiness.live_modes_locked)} />
+            <SmallMetric label="Phase 9 · Live Auto" value={phaseStatus(readiness.phase9_ready, !controls.live_auto_unlocked)} />
+        </div>
+
+        {controls.market_data_plan === "personal" ? <div role="alert" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><p className="font-semibold">Kite Personal Free blocks real-time validation</p><p className="mt-1">Order, GTT and account APIs are available, but the official live quote entitlement is not. Paper evidence that requires fresh Kite quotes and every live mode remain blocked.</p></div> : null}
+        {!controls.credentials_rotated_at ? <div role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900"><p className="font-semibold">Credential rotation is still required</p><p className="mt-1">Rotate the service-role key that was previously exposed, update the VPS and deployment secrets, and only then confirm rotation below.</p></div> : null}
+
+        <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+            {readiness.checks.map((check) => <div key={check.key} className={`flex gap-2 rounded-lg border p-3 text-sm ${check.passed ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-slate-200 bg-slate-50 text-slate-700"}`}>
+                {check.passed ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> : <Clock3 className="mt-0.5 h-4 w-4 shrink-0" />}
+                <p>{check.reason}</p>
+            </div>)}
+        </div>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <SmallMetric label="Fresh-quote sessions" value={`${readiness.counts.paper_quote_sessions}/5`} />
+            <SmallMetric label="Paper entries" value={`${readiness.counts.paper_entry_events}/3`} />
+            <SmallMetric label="Paper exits" value={`${readiness.counts.paper_exit_events}/2`} />
+            <SmallMetric label="Assisted closed trades" value={`${readiness.counts.assisted_live_closed_trades}/3`} />
+            <SmallMetric label="Active risk locks" value={String(readiness.counts.active_risk_locks)} />
+        </div>
+
+        <details className="mt-4 rounded-lg border border-slate-200 p-4">
+            <summary className="cursor-pointer text-sm font-semibold">Readiness confirmations and initial live limits</summary>
+            <form action={saveSwingLiveReadiness} className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <label className="flex items-center gap-3 rounded-lg border border-slate-200 p-3 text-sm font-medium text-slate-700"><input type="checkbox" name="ddpi_confirmed" defaultChecked={Boolean(controls.ddpi_confirmed_at)} className="h-4 w-4" />DDPI is enabled</label>
+                <label className="flex items-center gap-3 rounded-lg border border-slate-200 p-3 text-sm font-medium text-slate-700"><input type="checkbox" name="credentials_rotated" defaultChecked={Boolean(controls.credentials_rotated_at)} className="h-4 w-4" />Exposed service-role key was rotated</label>
+                <label className="block text-sm font-medium text-slate-700">Kite market-data plan<select name="market_data_plan" defaultValue={controls.market_data_plan} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2"><option value="personal">Personal Free</option><option value="connect">Connect ₹500</option></select></label>
+                <NumberField name="live_max_open_positions" label="Initial maximum live positions" value={controls.live_max_open_positions} min={1} max={2} step={1} />
+                <NumberField name="live_max_new_entries_per_day" label="Initial new live entries/day" value={controls.live_max_new_entries_per_day} min={1} max={2} step={1} />
+                <NumberField name="live_max_deployed_inr" label="Initial maximum deployed (INR)" value={num(controls.live_max_deployed_inr)} min={1} step={500} />
+                <NumberField name="live_daily_loss_limit_inr" label="Daily new-entry loss lock (INR)" value={num(controls.live_daily_loss_limit_inr)} min={1} step={10} />
+                <NumberField name="live_risk_per_trade_percentage" label="Maximum live risk/trade (%)" value={num(controls.live_risk_per_trade_percentage)} min={0.1} max={0.5} step={0.05} />
+                <NumberField name="live_amber_risk_multiplier" label="AMBER risk multiplier" value={num(controls.live_amber_risk_multiplier)} min={0.1} max={0.5} step={0.05} />
+                <div className="sm:col-span-2 lg:col-span-3"><FormSubmitButton pendingText="Saving readiness settings...">Save readiness settings</FormSubmitButton></div>
+            </form>
+        </details>
+
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+            {!controls.emergency_stop_active ? <form action={setSwingEmergencyStop}><input type="hidden" name="action" value="activate" /><ConfirmSubmitButton confirmation="Activate the emergency stop? New entries will be disarmed, while existing protective exits remain unchanged." pendingText="Activating emergency stop..." className="border-red-200 text-red-700 hover:bg-red-50">Emergency stop new entries</ConfirmSubmitButton></form> : <form action={setSwingEmergencyStop}><input type="hidden" name="action" value="clear" /><ConfirmSubmitButton confirmation="Clear the emergency stop? New entries will remain disarmed until a mode is explicitly armed." pendingText="Clearing emergency stop...">Clear emergency stop</ConfirmSubmitButton></form>}
+            <p className="text-xs text-slate-500">Emergency stop affects new entries only. Existing position monitoring and broker-side protection must continue.</p>
+        </div>
+    </section>;
+}
+
 function PaperAutoCard({ controls, worker, workerFresh, events, kiteConnected, today }: {
     controls: AutomationControls;
     worker: KiteWorkerHeartbeat | null;
@@ -504,7 +720,7 @@ function PaperAutoCard({ controls, worker, workerFresh, events, kiteConnected, t
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="flex gap-3">
                 <div className="rounded-lg bg-violet-50 p-2 text-violet-700"><Activity className="h-5 w-5" /></div>
-                <div><h2 id="paper-auto-title" className="text-lg font-semibold">Paper Auto</h2><p className="mt-1 text-sm text-slate-500">Production Kite quotes, simulated fills, realistic costs and automated paper stops. Broker order execution remains impossible in Batch 3.</p></div>
+                <div><h2 id="paper-auto-title" className="text-lg font-semibold">Paper Auto</h2><p className="mt-1 text-sm text-slate-500">Production Kite quotes, simulated fills, realistic costs and automated paper stops. This mode never submits broker orders.</p></div>
             </div>
             <span role="status" className={`w-fit rounded-full border px-3 py-1 text-xs font-semibold uppercase ${tone}`}>{statusLabel}</span>
         </div>
@@ -537,7 +753,7 @@ function PaperAutoCard({ controls, worker, workerFresh, events, kiteConnected, t
         <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
             {controls.automation_mode === "paper_auto" ? <form action={configureSwingPaperAuto}><input type="hidden" name="action" value="pause" /><input type="hidden" name="paper_slippage_bps" value={num(controls.paper_slippage_bps)} /><input type="hidden" name="paper_max_new_entries_per_day" value={controls.paper_max_new_entries_per_day} /><ConfirmSubmitButton confirmation="Pause only new Paper Auto entries? Existing simulated positions will keep their stop and exit monitoring." pendingText="Pausing entries...">Pause new entries</ConfirmSubmitButton></form> : null}
             {controls.automation_mode === "paper_auto" ? <form action={configureSwingPaperAuto}><input type="hidden" name="action" value="advisory" /><input type="hidden" name="paper_slippage_bps" value={num(controls.paper_slippage_bps)} /><input type="hidden" name="paper_max_new_entries_per_day" value={controls.paper_max_new_entries_per_day} /><ConfirmSubmitButton confirmation="Return new entries to manual Advisory mode? Existing paper records will remain in the journal." pendingText="Switching to Advisory...">Use Advisory mode</ConfirmSubmitButton></form> : null}
-            <p className="flex items-center gap-2 text-xs text-slate-500"><ShieldCheck className="h-4 w-4 text-emerald-600" />No broker order, leverage, short sale or automatic live trade path exists.</p>
+            <p className="flex items-center gap-2 text-xs text-slate-500"><ShieldCheck className="h-4 w-4 text-emerald-600" />Paper Auto has no broker-write path. Live modes use a separate locked VPS worker.</p>
         </div>
 
         <details className="mt-4 rounded-lg border border-slate-200 p-4">
@@ -590,7 +806,7 @@ function KiteConnectionCard({ connection, configured, worker, workerFresh, accou
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="flex gap-3">
                 <div className="rounded-lg bg-blue-50 p-2 text-blue-700"><KeyRound className="h-5 w-5" /></div>
-                <div><h2 id="kite-connection-title" className="text-lg font-semibold">Kite connection and VPS verification</h2><p className="mt-1 text-sm text-slate-500">The static-IP worker reads account state and compares live Swing Lab trades. Batch 2 cannot place, modify or cancel orders.</p></div>
+                <div><h2 id="kite-connection-title" className="text-lg font-semibold">Kite connection and VPS verification</h2><p className="mt-1 text-sm text-slate-500">The read-only worker verifies the account and reconciles live Swing Lab positions. Broker writes, when unlocked, use a separate static-IP live worker.</p></div>
             </div>
             <span role="status" className={`w-fit rounded-full border px-3 py-1 text-xs font-semibold uppercase ${tone}`}>{statusLabel}</span>
         </div>
@@ -610,7 +826,7 @@ function KiteConnectionCard({ connection, configured, worker, workerFresh, accou
                     <OperationalRow label="Heartbeat" value={dateTime(worker?.heartbeat_at)} good={workerFresh} />
                     <OperationalRow label="Public IP" value={worker?.observed_public_ip ?? "Unavailable"} good={Boolean(workerFresh && worker?.observed_public_ip)} />
                     <OperationalRow label="Kite session" value={worker?.kite_session_healthy ? "Validated" : "Not validated"} good={Boolean(workerFresh && worker?.kite_session_healthy)} />
-                    <OperationalRow label="Quote stream" value="Not started in Batch 2" />
+                    <OperationalRow label="Quote stream" value="Handled by Paper/Live worker" />
                 </dl>
             </div>
             <div className="rounded-lg border border-slate-200 p-4">
@@ -641,7 +857,7 @@ function KiteConnectionCard({ connection, configured, worker, workerFresh, accou
         <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
             {configured ? <a href="/api/kite/login" className="inline-flex items-center justify-center rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2">{active ? "Reconnect Kite for today" : "Connect Kite for today"}</a> : <button type="button" disabled className="rounded-lg bg-slate-200 px-4 py-2.5 text-sm font-medium text-slate-500">Connect Kite for today</button>}
             {connection && status !== "disconnected" ? <form action={disconnectKiteAccount}><ConfirmSubmitButton confirmation="Remove the locally stored Kite session? Swing automation will remain advisory and disarmed." pendingText="Removing session...">Remove stored session</ConfirmSubmitButton></form> : null}
-            <p className="flex items-center gap-2 text-xs text-slate-500"><ShieldCheck className="h-4 w-4 text-emerald-600" />Encrypted token · daily expiry · read-only allow-list · no live orders</p>
+            <p className="flex items-center gap-2 text-xs text-slate-500"><ShieldCheck className="h-4 w-4 text-emerald-600" />Encrypted token · daily expiry · read-only reconciliation · separate locked execution worker</p>
         </div>
     </section>;
 }

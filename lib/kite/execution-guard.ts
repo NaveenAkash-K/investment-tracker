@@ -1,6 +1,6 @@
-export const KITE_EXECUTION_PHASE = "paper_auto_only" as const;
+export const KITE_EXECUTION_PHASE = "vps_only_live_execution" as const;
 
-/** Batch 3 contains no broker order transport. Keep this guard fail-closed. */
+/** The Vercel/Tracker process never owns Kite order transport. */
 export function assertKiteOrderPlacementAllowed(): never {
-    throw new Error("Kite order placement is unavailable during the Paper Auto phase.");
+    throw new Error("Kite order placement is restricted to the locked static-IP VPS worker.");
 }

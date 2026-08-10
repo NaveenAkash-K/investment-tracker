@@ -88,6 +88,76 @@ export async function configureSwingPaperAuto(formData: FormData) {
             : "Swing Lab returned to Advisory mode. Existing simulated positions remain visible.");
 }
 
+export async function saveSwingLiveReadiness(formData: FormData) {
+    await execute(async () => {
+        const supabase = await authenticatedClient();
+        const { error } = await supabase.rpc("configure_swing_live_readiness", {
+            p_ddpi_confirmed: formData.get("ddpi_confirmed") === "on",
+            p_credentials_rotated: formData.get("credentials_rotated") === "on",
+            p_market_data_plan: required(formData, "market_data_plan"),
+            p_max_open_positions: integer(formData, "live_max_open_positions"),
+            p_max_new_entries_per_day: integer(formData, "live_max_new_entries_per_day"),
+            p_max_deployed_inr: number(formData, "live_max_deployed_inr"),
+            p_daily_loss_limit_inr: number(formData, "live_daily_loss_limit_inr"),
+            p_risk_per_trade_percentage: number(formData, "live_risk_per_trade_percentage"),
+            p_amber_risk_multiplier: number(formData, "live_amber_risk_multiplier"),
+        });
+        if (error) throw new Error(error.message);
+    }, "Swing execution readiness settings saved. Live broker execution remains locked.");
+}
+
+export async function setSwingEmergencyStop(formData: FormData) {
+    const action = required(formData, "action");
+    await execute(async () => {
+        const supabase = await authenticatedClient();
+        const { error } = await supabase.rpc("set_swing_emergency_stop", { p_action: action });
+        if (error) throw new Error(error.message);
+    }, action === "activate"
+        ? "Emergency stop activated. New entries are disabled; existing protection remains unchanged."
+        : "Emergency stop cleared. New entries remain disarmed until you explicitly arm an eligible mode.");
+}
+
+export async function configureSwingLiveMode(formData: FormData) {
+    const action = required(formData, "action");
+    const mode = required(formData, "mode");
+    await execute(async () => {
+        const supabase = await authenticatedClient();
+        const { error } = await supabase.rpc("configure_swing_live_mode", {
+            p_action: action,
+            p_mode: mode,
+        });
+        if (error) throw new Error(error.message);
+    }, action === "arm"
+        ? `${mode === "live_auto" ? "Live Auto" : "Assisted Live"} is armed for today's NSE session.`
+        : action === "pause"
+            ? "New live entries are paused. Reconciliation and existing broker protection continue."
+            : "Swing Lab returned to Advisory mode. Existing broker protection continues.");
+}
+
+export async function decideSwingAssistedIntent(formData: FormData) {
+    const action = required(formData, "action");
+    await execute(async () => {
+        const supabase = await authenticatedClient();
+        const { error } = await supabase.rpc("decide_swing_assisted_intent", {
+            p_intent_id: required(formData, "intent_id"),
+            p_action: action,
+        });
+        if (error) throw new Error(error.message);
+    }, action === "approve"
+        ? "Assisted Live order approved. The VPS will revalidate it before submission."
+        : "Assisted Live order rejected. No broker order will be sent.");
+}
+
+export async function clearSwingRiskControl(formData: FormData) {
+    await execute(async () => {
+        const supabase = await authenticatedClient();
+        const { error } = await supabase.rpc("clear_swing_risk_control", {
+            p_activation_id: required(formData, "activation_id"),
+        });
+        if (error) throw new Error(error.message);
+    }, "Risk lock cleared after review. New entries remain paused until you explicitly re-arm a mode.");
+}
+
 export async function confirmSwingEntry(formData: FormData) {
     await execute(async () => {
         const supabase = await authenticatedClient();

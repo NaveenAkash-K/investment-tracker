@@ -40,12 +40,27 @@ test("broker ids are masked before display", () => {
     assert.equal(maskBrokerUserId(null), "Unavailable");
 });
 
-test("Batch 3 has a permanent broker-order guard", () => {
-    assert.equal(KITE_EXECUTION_PHASE, "paper_auto_only");
+test("Tracker routes retain a permanent broker-order guard", () => {
+    assert.equal(KITE_EXECUTION_PHASE, "vps_only_live_execution");
     assert.throws(
         () => assertKiteOrderPlacementAllowed(),
-        /order placement is unavailable/i,
+        /static-IP VPS worker/i,
     );
+});
+
+test("Phase 8 and 9 migration keeps browser writes out of broker transport", () => {
+    const migration = readFileSync(
+        new URL("../supabase/migrations/202608100002_swing_live_execution.sql", import.meta.url),
+        "utf8",
+    );
+    assert.match(migration, /observed_below_trigger boolean not null default false/);
+    assert.match(migration, /approval_status in \('not_required', 'pending', 'approved', 'rejected', 'expired'\)/);
+    assert.match(migration, /for update skip locked limit 1/);
+    assert.match(migration, /An automatic protective stop cannot move downward/);
+    assert.match(migration, /grant execute on function public\.record_swing_broker_execution\(uuid,text,jsonb\) to service_role/);
+    assert.match(migration, /grant execute on function public\.decide_swing_assisted_intent\(uuid,text\) to authenticated/);
+    assert.doesNotMatch(migration, /grant execute on function public\.record_swing_broker_execution\(uuid,text,jsonb\) to authenticated/);
+    assert.match(migration, /broker_execution_enabled=false/);
 });
 
 test("Paper Auto migration remains simulated, idempotent and service-role controlled", () => {
@@ -95,4 +110,19 @@ test("Kite routes only authenticate and exchange a session token", () => {
     assert.match(callbackRoute, /api\.kite\.trade\/session\/token/);
     assert.doesNotMatch(`${loginRoute}\n${callbackRoute}`, /export const dynamic/);
     assert.doesNotMatch(`${loginRoute}\n${callbackRoute}`, /place_order|\/orders|cancel_order|modify_order/);
+});
+
+test("Phase 7 readiness migration records evidence while keeping both live modes locked", () => {
+    const migration = readFileSync(
+        new URL("../supabase/migrations/202608100001_swing_execution_readiness.sql", import.meta.url),
+        "utf8",
+    );
+    assert.match(migration, /assisted_live_unlocked boolean not null default false/);
+    assert.match(migration, /broker_execution_enabled boolean not null default false/);
+    assert.match(migration, /market_data_plan in \('personal', 'connect'\)/);
+    assert.match(migration, /fresh_quote_cycle_count/);
+    assert.match(migration, /Paper Auto entry events observed/);
+    assert.match(migration, /existing_protection_unchanged', true/);
+    assert.match(migration, /automation_mode = 'advisory', new_entries_enabled = false/);
+    assert.doesNotMatch(migration, /place_order|modify_order|cancel_order|submit_order/);
 });

@@ -183,7 +183,7 @@ test("global and strategic-policy explanations are persisted and restored", () =
     assert.match(migration, /adjustment_percentage numeric/);
     assert.match(migration, /restore_global_policy_signal_details/);
     assert.match(migration, /restore_complete_portfolio_backup_v8/);
-    assert.match(restoreAction, /restore_complete_portfolio_backup_v9/);
+    assert.match(restoreAction, /restore_complete_portfolio_backup_v11/);
     assert.match(page, /Strategic allocation signals/);
     assert.match(page, /Price session not applicable/);
     assert.match(page, /Base shows the regime-adjusted strategic allocation/);

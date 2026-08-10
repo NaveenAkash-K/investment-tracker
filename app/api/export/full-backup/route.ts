@@ -11,6 +11,7 @@ const TABLES = [
     "category_signal_mappings", "sip_signal_mappings",
     "swing_lab_settings", "swing_scan_runs", "swing_monitor_runs", "swing_candidates",
     "swing_trades", "swing_trade_events", "swing_automation_controls", "swing_paper_events",
+    "swing_execution_validation_sessions",
     "news_settings", "news_sources", "news_pipeline_runs", "news_articles",
     "market_events", "market_event_articles", "market_event_impacts",
     "market_event_reactions", "portfolio_event_impacts",
