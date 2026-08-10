@@ -93,7 +93,9 @@ export async function saveSwingLiveReadiness(formData: FormData) {
         const supabase = await authenticatedClient();
         const { error } = await supabase.rpc("configure_swing_live_readiness", {
             p_ddpi_confirmed: formData.get("ddpi_confirmed") === "on",
-            p_credentials_rotated: formData.get("credentials_rotated") === "on",
+            // Retained only for compatibility with the Phase 7 RPC signature.
+            // Credential rotation is not an execution-readiness condition.
+            p_credentials_rotated: true,
             p_market_data_plan: required(formData, "market_data_plan"),
             p_max_open_positions: integer(formData, "live_max_open_positions"),
             p_max_new_entries_per_day: integer(formData, "live_max_new_entries_per_day"),

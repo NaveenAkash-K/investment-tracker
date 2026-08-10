@@ -63,6 +63,18 @@ test("Phase 8 and 9 migration keeps browser writes out of broker transport", () 
     assert.match(migration, /broker_execution_enabled=false/);
 });
 
+test("credential rotation is not an execution-readiness gate", () => {
+    const migration = readFileSync(
+        new URL("../supabase/migrations/202608100003_remove_credential_rotation_gate.sql", import.meta.url),
+        "utf8",
+    );
+    const swingPage = readFileSync(new URL("../app/(app)/swing-lab/page.tsx", import.meta.url), "utf8");
+    assert.match(migration, /ensure_swing_credentials_compatibility/);
+    assert.match(migration, /Credential rotation is not an execution-readiness prerequisite/);
+    assert.doesNotMatch(swingPage, /Credential rotation is still required/);
+    assert.doesNotMatch(swingPage, /Exposed service-role key was rotated/);
+});
+
 test("Paper Auto migration remains simulated, idempotent and service-role controlled", () => {
     const migration = readFileSync(
         new URL("../supabase/migrations/202608020003_swing_paper_auto.sql", import.meta.url),

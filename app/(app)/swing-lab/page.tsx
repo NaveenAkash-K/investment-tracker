@@ -155,7 +155,6 @@ type AutomationControls = {
     live_auto_unlocked: boolean;
     broker_execution_enabled: boolean;
     ddpi_confirmed_at: string | null;
-    credentials_rotated_at: string | null;
     market_data_plan: "personal" | "connect";
     live_max_open_positions: number;
     live_max_new_entries_per_day: number;
@@ -341,7 +340,7 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
         supabase.from("swing_broker_account_snapshots").select("observed_at, account_status, available_cash, utilised_debits, net_equity, holdings_count, positions_count, orders_count, trades_count").eq("user_id", user.id).order("observed_at", { ascending: false }).limit(1).maybeSingle(),
         supabase.from("swing_reconciliation_runs").select("id, reconciliation_status, tracker_positions, broker_positions, matched_positions, mismatch_positions, broker_only_positions, checked_at, details").eq("user_id", user.id).order("checked_at", { ascending: false }).limit(1).maybeSingle(),
         supabase.from("swing_position_reconciliations").select("reconciliation_run_id, symbol, reconciliation_status, tracker_quantity, broker_quantity, tracker_average_price, broker_average_price").eq("user_id", user.id).order("checked_at", { ascending: false }).limit(100),
-        supabase.from("swing_automation_controls").select("automation_mode, new_entries_enabled, armed_nse_session, emergency_stop_active, paper_slippage_bps, paper_max_new_entries_per_day, assisted_live_unlocked, live_auto_unlocked, broker_execution_enabled, ddpi_confirmed_at, credentials_rotated_at, market_data_plan, live_max_open_positions, live_max_new_entries_per_day, live_max_deployed_inr, live_daily_loss_limit_inr, live_risk_per_trade_percentage, live_amber_risk_multiplier").eq("user_id", user.id).maybeSingle(),
+        supabase.from("swing_automation_controls").select("automation_mode, new_entries_enabled, armed_nse_session, emergency_stop_active, paper_slippage_bps, paper_max_new_entries_per_day, assisted_live_unlocked, live_auto_unlocked, broker_execution_enabled, ddpi_confirmed_at, market_data_plan, live_max_open_positions, live_max_new_entries_per_day, live_max_deployed_inr, live_daily_loss_limit_inr, live_risk_per_trade_percentage, live_amber_risk_multiplier").eq("user_id", user.id).maybeSingle(),
         supabase.from("swing_worker_heartbeats").select("worker_id, worker_version, observed_public_ip, worker_status, execution_mode, kite_session_healthy, quote_stream_healthy, reconciliation_healthy, heartbeat_at, details").eq("user_id", user.id).eq("execution_mode", "paper_auto").order("heartbeat_at", { ascending: false }).limit(1).maybeSingle(),
         supabase.from("swing_paper_events").select("id, event_type, symbol, quantity, price, fees_inr, reason, observed_at").eq("user_id", user.id).order("observed_at", { ascending: false }).limit(20),
         supabase.rpc("get_swing_rollout_readiness"),
@@ -373,7 +372,7 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
         paper_slippage_bps: 5, paper_max_new_entries_per_day: 1,
         assisted_live_unlocked: false, broker_execution_enabled: false,
         live_auto_unlocked: false,
-        ddpi_confirmed_at: null, credentials_rotated_at: null,
+        ddpi_confirmed_at: null,
         market_data_plan: "personal", live_max_open_positions: 1,
         live_max_new_entries_per_day: 1, live_max_deployed_inr: 5000,
         live_daily_loss_limit_inr: 100, live_risk_per_trade_percentage: 0.5,
@@ -655,10 +654,9 @@ function SwingRolloutReadinessCard({ controls, readiness }: {
         </div>
 
         {controls.market_data_plan === "personal" ? <div role="alert" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><p className="font-semibold">Kite Personal Free blocks real-time validation</p><p className="mt-1">Order, GTT and account APIs are available, but the official live quote entitlement is not. Paper evidence that requires fresh Kite quotes and every live mode remain blocked.</p></div> : null}
-        {!controls.credentials_rotated_at ? <div role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900"><p className="font-semibold">Credential rotation is still required</p><p className="mt-1">Rotate the service-role key that was previously exposed, update the VPS and deployment secrets, and only then confirm rotation below.</p></div> : null}
 
         <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-            {readiness.checks.map((check) => <div key={check.key} className={`flex gap-2 rounded-lg border p-3 text-sm ${check.passed ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-slate-200 bg-slate-50 text-slate-700"}`}>
+            {readiness.checks.filter((check) => check.key !== "credentials").map((check) => <div key={check.key} className={`flex gap-2 rounded-lg border p-3 text-sm ${check.passed ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-slate-200 bg-slate-50 text-slate-700"}`}>
                 {check.passed ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> : <Clock3 className="mt-0.5 h-4 w-4 shrink-0" />}
                 <p>{check.reason}</p>
             </div>)}
@@ -676,7 +674,6 @@ function SwingRolloutReadinessCard({ controls, readiness }: {
             <summary className="cursor-pointer text-sm font-semibold">Readiness confirmations and initial live limits</summary>
             <form action={saveSwingLiveReadiness} className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <label className="flex items-center gap-3 rounded-lg border border-slate-200 p-3 text-sm font-medium text-slate-700"><input type="checkbox" name="ddpi_confirmed" defaultChecked={Boolean(controls.ddpi_confirmed_at)} className="h-4 w-4" />DDPI is enabled</label>
-                <label className="flex items-center gap-3 rounded-lg border border-slate-200 p-3 text-sm font-medium text-slate-700"><input type="checkbox" name="credentials_rotated" defaultChecked={Boolean(controls.credentials_rotated_at)} className="h-4 w-4" />Exposed service-role key was rotated</label>
                 <label className="block text-sm font-medium text-slate-700">Kite market-data plan<select name="market_data_plan" defaultValue={controls.market_data_plan} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2"><option value="personal">Personal Free</option><option value="connect">Connect ₹500</option></select></label>
                 <NumberField name="live_max_open_positions" label="Initial maximum live positions" value={controls.live_max_open_positions} min={1} max={2} step={1} />
                 <NumberField name="live_max_new_entries_per_day" label="Initial new live entries/day" value={controls.live_max_new_entries_per_day} min={1} max={2} step={1} />

@@ -140,8 +140,8 @@ begin
         if v_controls.market_data_plan <> 'connect' then
             raise exception 'Kite Connect market data is required for live execution.';
         end if;
-        if v_controls.ddpi_confirmed_at is null or v_controls.credentials_rotated_at is null then
-            raise exception 'DDPI and credential rotation must be confirmed before live execution.';
+        if v_controls.ddpi_confirmed_at is null then
+            raise exception 'DDPI must be confirmed before live execution.';
         end if;
         select * into v_connection from public.kite_broker_connections
         where user_id = v_user_id;
@@ -262,9 +262,8 @@ begin
     if p_broker_execution_enabled and (
         v_controls.market_data_plan <> 'connect'
         or v_controls.ddpi_confirmed_at is null
-        or v_controls.credentials_rotated_at is null
     ) then
-        raise exception 'Connect market data, DDPI and rotated credentials are required.';
+        raise exception 'Connect market data and DDPI are required.';
     end if;
     if p_live_auto_unlocked and not p_assisted_live_unlocked then
         raise exception 'Live Auto cannot unlock before Assisted Live.';
@@ -279,7 +278,7 @@ begin
     select count(*) into v_assisted_closed from public.swing_trades where user_id=p_user_id
       and trade_mode='live' and execution_source='assisted_live' and status='closed';
     v_phase7_ready := v_controls.market_data_plan='connect'
-      and v_controls.ddpi_confirmed_at is not null and v_controls.credentials_rotated_at is not null
+      and v_controls.ddpi_confirmed_at is not null
       and v_quote_sessions>=5 and v_paper_entries>=3 and v_paper_exits>=2
       and exists(select 1 from public.kite_broker_connections where user_id=p_user_id
           and connection_status='connected' and session_expires_at>now())

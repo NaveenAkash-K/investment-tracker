@@ -17,7 +17,7 @@ The Targets page includes a new-money allocation autopilot. It uses the entered 
 
 1. Install packages with `npm install`.
 2. Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` to `.env.local`.
-3. For a new Supabase project, apply every SQL file in `supabase/migrations` in filename order, starting with [the initial schema](supabase/migrations/202607190001_initial_schema.sql). For an existing installation, apply only migrations newer than the last one already run. The current final migration is [Assisted Live and capped Live Auto](supabase/migrations/202608100002_swing_live_execution.sql).
+3. For a new Supabase project, apply every SQL file in `supabase/migrations` in filename order, starting with [the initial schema](supabase/migrations/202607190001_initial_schema.sql). For an existing installation, apply only migrations newer than the last one already run. The current final migration is [the credential-gate cleanup](supabase/migrations/202608100003_remove_credential_rotation_gate.sql).
 4. Run `npm run dev` and open `http://localhost:3000`.
 
 Migrations are transactional. The Kite migrations add the fail-closed Swing execution data model, isolate encrypted sessions from browser access, support read-only static-IP reconciliation, simulated Paper Auto, Assisted Live approvals, and capped Live Auto with broker transport restricted to the VPS service role.
