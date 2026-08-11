@@ -61,6 +61,13 @@ jobs:
           create or replace function auth.uid() returns uuid language sql stable as $$
               select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid
           $$;
+          create or replace function auth.role() returns text language sql stable as $$
+              select coalesce(
+                  nullif(current_setting('request.jwt.claim.role', true), ''),
+                  nullif(current_setting('role', true), 'none'),
+                  current_user::text
+              )
+          $$;
           create role anon nologin;
           create role authenticated nologin;
           create role service_role nologin bypassrls;
@@ -75,4 +82,6 @@ jobs:
           done
 
       - name: Exercise contracts, old backups, and delivery recovery
-        run: psql -v ON_ERROR_STOP=1 -f tests/postgres-second-rereview.sql
+        run: |
+          psql -v ON_ERROR_STOP=1 -f tests/postgres-second-rereview.sql
+          psql -v ON_ERROR_STOP=1 -f tests/postgres-execution-safety.sql

@@ -34,7 +34,8 @@
         "market_regime": {"enum": ["GREEN", "AMBER", "RED", "UNKNOWN"]},
         "session_state": {"enum": ["completed", "no_session", "before_close", "unknown"]},
         "session_matches_expected": {"type": "boolean"},
-        "candidates": {"type": "array"}
+        "candidates": {"type": "array"},
+        "technical_setups": {"type": "array"}
       },
       "additionalProperties": true
     },

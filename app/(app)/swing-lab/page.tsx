@@ -23,6 +23,7 @@ import {
     createSwingGttAssistedEntry,
     decideSwingAssistedIntent,
     disconnectKiteAccount,
+    resetKiteBrokerIdentity,
     reconcileSwingCorporateAction,
     saveSwingSettings,
     saveSwingLiveReadiness,
@@ -264,6 +265,44 @@ type PaperEvent = {
     reason: string;
     observed_at: string;
 };
+type TechnicalSetup = {
+    id: string;
+    scan_id: string;
+    signal_key: string;
+    symbol: string;
+    company_name: string;
+    sector: string | null;
+    setup_score: number | string;
+    setup_as_of: string;
+    expires_on: string;
+    market_regime: string;
+    close_price: number | string;
+    entry_trigger: number | string;
+    maximum_entry: number | string;
+    initial_stop: number | string;
+    suggested_quantity: number;
+    actionability_status: string;
+    execution_block_reasons: unknown;
+};
+type PerformanceScorecard = {
+    source: string;
+    closed_trades: number;
+    open_trades: number;
+    net_pnl_inr: number | string;
+    expectancy_r: number | string | null;
+    win_rate_percentage: number | string | null;
+};
+type CandidateLifecycleScorecard = {
+    window_days: number;
+    published: number;
+    triggered: number;
+    entered: number;
+    expired: number;
+    invalidated: number;
+    trigger_rate_percentage: number | string | null;
+    entry_rate_percentage: number | string | null;
+    median_hours_to_trigger: number | string | null;
+};
 
 const defaults: Settings = {
     trading_capital_inr: 100000,
@@ -353,7 +392,7 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) redirect("/auth/login");
 
-    const [settingsResult, scanResult, monitorResult, candidatesResult, tradesResult, tradeEventsResult, deliveriesResult, kiteConnectionResult, kiteWorkerResult, kiteAccountResult, kiteReconciliationResult, kiteReconciliationRowsResult, automationResult, gttWorkerResult, gttEntriesResult, paperWorkerResult, paperEventsResult, readinessResult, liveWorkerResult, liveIntentsResult, liveOrdersResult, liveProtectionsResult, liveRiskLocksResult] = await Promise.all([
+    const [settingsResult, scanResult, monitorResult, candidatesResult, tradesResult, tradeEventsResult, deliveriesResult, kiteConnectionResult, kiteWorkerResult, kiteAccountResult, kiteReconciliationResult, kiteReconciliationRowsResult, automationResult, gttWorkerResult, gttEntriesResult, paperWorkerResult, paperEventsResult, readinessResult, liveWorkerResult, liveIntentsResult, liveOrdersResult, liveProtectionsResult, liveRiskLocksResult, watchlistResult, scorecardsResult, lifecycleResult] = await Promise.all([
         supabase.from("swing_lab_settings").select("trading_capital_inr, risk_per_trade_percentage, max_open_positions, max_sector_positions, minimum_setup_score, paper_mode").eq("user_id", user.id).maybeSingle(),
         supabase.from("swing_scan_runs").select("id, as_of, status, model_version, contract_version, publication_status, market_regime, raw_market_regime, regime_confirmed, regime_reason, regime_confirmation_reason, benchmark_symbol, benchmark_close, benchmark_sma50, benchmark_sma200, benchmark_distance_200_percentage, benchmark_price_date, expected_price_session, session_matches_expected, session_state, breadth_percentage, breadth_available, breadth_coverage_percentage, universe_size, eligible_size, published_size, effective_minimum_score, effective_risk_percentage, scan_blocked_reason, gate_counts, data_issues").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
         supabase.from("swing_monitor_runs").select("id, as_of, status, contract_version, price_observed_at, candidates_requested, positions_requested, candidates_evaluated, positions_evaluated, candidates_checked, positions_checked, notification_count, failed_candidate_ids, failed_trade_ids, data_issues").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
@@ -377,11 +416,14 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
         supabase.from("swing_broker_orders").select("id, intent_id, broker_order_id, status, quantity, filled_quantity, average_price, status_message, updated_at").eq("user_id", user.id).order("updated_at", { ascending: false }).limit(30),
         supabase.from("swing_protective_orders").select("id, trade_id, broker_trigger_id, status, protected_quantity, trigger_price, limit_price, last_verified_at, failure_reason").eq("user_id", user.id).order("updated_at", { ascending: false }).limit(30),
         supabase.from("swing_risk_control_activations").select("id, control_type, reason, activated_at").eq("user_id", user.id).eq("status", "active").order("activated_at", { ascending: false }).limit(20),
+        supabase.from("swing_setup_watchlist").select("id, scan_id, signal_key, symbol, company_name, sector, setup_score, setup_as_of, expires_on, market_regime, close_price, entry_trigger, maximum_entry, initial_stop, suggested_quantity, actionability_status, execution_block_reasons").eq("user_id", user.id).order("setup_score", { ascending: false }).limit(20),
+        supabase.rpc("get_swing_performance_scorecards"),
+        supabase.rpc("get_swing_candidate_lifecycle_scorecard"),
     ]);
     const params = await searchParams;
-    const queryError = settingsResult.error || scanResult.error || monitorResult.error || candidatesResult.error || tradesResult.error || tradeEventsResult.error || deliveriesResult.error || kiteConnectionResult.error || kiteWorkerResult.error || kiteAccountResult.error || kiteReconciliationResult.error || kiteReconciliationRowsResult.error || automationResult.error || gttWorkerResult.error || gttEntriesResult.error || paperWorkerResult.error || paperEventsResult.error || readinessResult.error || liveWorkerResult.error || liveIntentsResult.error || liveOrdersResult.error || liveProtectionsResult.error || liveRiskLocksResult.error;
+    const queryError = settingsResult.error || scanResult.error || monitorResult.error || candidatesResult.error || tradesResult.error || tradeEventsResult.error || deliveriesResult.error || kiteConnectionResult.error || kiteWorkerResult.error || kiteAccountResult.error || kiteReconciliationResult.error || kiteReconciliationRowsResult.error || automationResult.error || gttWorkerResult.error || gttEntriesResult.error || paperWorkerResult.error || paperEventsResult.error || readinessResult.error || liveWorkerResult.error || liveIntentsResult.error || liveOrdersResult.error || liveProtectionsResult.error || liveRiskLocksResult.error || watchlistResult.error || scorecardsResult.error || lifecycleResult.error;
     if (queryError) {
-        return <main className="mx-auto max-w-5xl px-4 py-8"><div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-800"><h1 className="font-semibold">Swing Lab migration required</h1><p className="mt-2 text-sm">{queryError.message}</p><p className="mt-2 text-xs">Apply all pending Supabase migrations through <code>202608100004_personal_free_gtt_assisted.sql</code>, then reload this page.</p></div></main>;
+        return <main className="mx-auto max-w-5xl px-4 py-8"><div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-800"><h1 className="font-semibold">Swing Lab migration required</h1><p className="mt-2 text-sm">{queryError.message}</p><p className="mt-2 text-xs">Apply all pending Supabase migrations through <code>202608110002_swing_observability_and_delivery.sql</code>, then reload this page.</p></div></main>;
     }
 
     const settings = (settingsResult.data ?? defaults) as Settings;
@@ -416,6 +458,13 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
     const liveOrders = (liveOrdersResult.data ?? []) as LiveBrokerOrder[];
     const liveProtections = (liveProtectionsResult.data ?? []) as LiveProtection[];
     const liveRiskLocks = (liveRiskLocksResult.data ?? []) as LiveRiskLock[];
+    const technicalSetups = ((watchlistResult.data ?? []) as TechnicalSetup[])
+        .filter((setup) => setup.scan_id === latestScan?.id);
+    const scorecards = (scorecardsResult.data ?? []) as PerformanceScorecard[];
+    const lifecycle = (lifecycleResult.data ?? {
+        window_days: 180, published: 0, triggered: 0, entered: 0, expired: 0, invalidated: 0,
+        trigger_rate_percentage: null, entry_rate_percentage: null, median_hours_to_trigger: null,
+    }) as CandidateLifecycleScorecard;
     const kiteConfiguration = getKiteConfigurationState();
     const candidates = (candidatesResult.data ?? []) as Candidate[];
     const trades = (tradesResult.data ?? []) as Trade[];
@@ -514,6 +563,18 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
         .filter((entry) => ["pending_submission", "active", "triggered", "order_open", "cancel_requested"].includes(entry.status))
         .map((entry) => entry.candidate_id)
         .filter((value): value is string => Boolean(value)));
+    const triggeredCandidates = activeCandidates.filter((candidate) => candidate.status === "triggered");
+    const nextAction = automation.emergency_stop_active
+        ? "Review and clear the emergency stop only after its cause is resolved."
+        : liveRiskLocks.length
+            ? "Review the active execution risk lock before enabling any new entry."
+            : !kiteConnected
+                ? "Connect Kite for today if you want broker reconciliation or GTT Assisted. Advisory research remains available."
+                : triggeredCandidates.length
+                    ? `Review ${triggeredCandidates.length} monitor-confirmed trigger${triggeredCandidates.length === 1 ? "" : "s"}. Confirm only a real fill from Kite.`
+                    : activeCandidates.length
+                        ? `Watch ${activeCandidates.length} ready setup${activeCandidates.length === 1 ? "" : "s"}; no manual entry is available until the monitor confirms a trigger.`
+                        : "No entry action is required. Wait for the next completed-session scan."
 
     return <main><div className="mx-auto max-w-7xl px-4 py-8">
         <PageHeader title="Swing Lab" description="End-of-day Indian equity candidates, Personal Free GTT assistance, Paper Auto validation, and staged live execution." />
@@ -521,15 +582,19 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
         <AnalyzerDeliveryAlerts deliveries={deliveryRows} returnTo="/swing-lab" resolveAction={resolveAnalyzerDelivery} />
         {latestScan ? <AnalyzerContractStatus version={latestScan.contract_version} publisher="Swing scan" /> : null}
         {latestMonitor ? <AnalyzerContractStatus version={latestMonitor.contract_version} publisher="Swing monitor" /> : null}
-        <KiteConnectionCard connection={kiteConnection} configured={kiteConfiguration.configured} worker={kiteWorker} workerFresh={kiteWorkerFresh} account={kiteAccount} reconciliation={kiteReconciliation} reconciliationRows={kiteReconciliationRows} />
-        <SwingRolloutReadinessCard controls={automation} readiness={readiness} />
-        <GttAssistedCard controls={automation} worker={gttWorker} workerFresh={gttWorkerFresh} entries={gttEntries} kiteConnected={kiteConnected} />
-        <LiveExecutionCard controls={automation} worker={liveWorker} workerFresh={liveWorkerFresh} intents={liveIntents} orders={liveOrders} protections={liveProtections} riskLocks={liveRiskLocks} today={currentIndiaDate} />
-        <PaperAutoCard controls={automation} worker={paperWorker} workerFresh={paperWorkerFresh} events={paperEvents} kiteConnected={kiteConnected} today={currentIndiaDate} />
+        <section className="mb-6 rounded-xl border border-blue-200 bg-gradient-to-br from-blue-50 to-white p-5" aria-labelledby="swing-next-action">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                <div><p className="text-xs font-semibold uppercase tracking-wide text-blue-700">What should I do now?</p><h2 id="swing-next-action" className="mt-1 text-lg font-semibold text-slate-950">{nextAction}</h2><p className="mt-2 text-sm text-slate-600">Current mode: <strong>{automation.gtt_assisted_enabled ? "GTT Assisted" : paperAutoArmed ? "Paper Auto" : liveModeArmed ? automation.automation_mode.replaceAll("_", " ") : "Advisory"}</strong>. A ready setup is a watchlist item; only a monitor-confirmed trigger or an explicitly approved broker GTT can become a trade.</p></div>
+                <div className="grid min-w-fit grid-cols-2 gap-2 text-center text-sm"><QuickState label="Ready setups" value={String(activeCandidates.length)} /><QuickState label="Triggered now" value={String(triggeredCandidates.length)} tone={triggeredCandidates.length ? "good" : undefined} /></div>
+            </div>
+        </section>
+        <nav aria-label="Swing Lab sections" className="mb-6 flex gap-2 overflow-x-auto rounded-xl border border-slate-200 bg-white p-2 text-sm font-medium">
+            {[['overview','Overview'],['setups','Setups'],['positions','Positions'],['journal','Journal'],['automation','Automation'],['settings','Settings']].map(([href,label]) => <a key={href} href={`#${href}`} className="whitespace-nowrap rounded-lg px-3 py-2 text-slate-600 hover:bg-slate-100 hover:text-slate-950">{label}</a>)}
+        </nav>
         {scanHeartbeatMissed ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900"><p className="font-semibold">End-of-day scan heartbeat is missing</p><p className="mt-1">No scan was published for the latest expected workflow date, {date(expectedScanDate)}. Check the GitHub Action and Tracker publication logs.</p></div> : latestScan?.status === "failed" ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">The latest end-of-day scan failed. Do not treat older candidates as newly validated.</div> : null}
         {monitorHeartbeatMissed ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900"><p className="font-semibold">Morning monitor heartbeat is missing</p><p className="mt-1">No monitor was published for the latest expected workflow date, {date(expectedMonitorDate)}. Verify open positions directly with your broker until the job recovers.</p></div> : latestMonitor?.status === "failed" ? <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">The latest morning monitor failed. No requested record could be evaluated from fresh data; verify candidates and stops with your broker.</div> : latestMonitor?.status === "partial" ? <div role="alert" className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">The latest morning monitor was partial. Only the explicitly evaluated records below received a fresh check.</div> : null}
 
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        <section id="overview" className="scroll-mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
             <Summary label="Trading capital" value={money(settings.trading_capital_inr)} helper={settings.paper_mode ? "Paper mode" : "Live mode"} />
             <Summary label="Open positions" value={`${openTrades.length}/${settings.max_open_positions}`} helper={`${money(metrics.openCapitalInr)} deployed`} />
             <Summary label="Open risk" value={money(metrics.openRiskInr)} helper="Entry minus current stop" tone={metrics.openRiskInr > 0 ? "warn" : undefined} />
@@ -537,7 +602,7 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
             <Summary label="Average expectancy" value={metrics.averageRMultiple === null ? "Not enough data" : signed(metrics.averageRMultiple, "R")} helper={metrics.winRatePercentage === null ? "No closed trades" : `${metrics.winRatePercentage.toFixed(0)}% win rate`} tone={metrics.averageRMultiple === null ? undefined : metrics.averageRMultiple > 0 ? "good" : "bad"} />
         </section>
 
-        <section className="mt-6 rounded-xl border border-slate-200 bg-white p-5">
+        <section className="mt-6 scroll-mt-6 rounded-xl border border-slate-200 bg-white p-5">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div><h2 className="text-lg font-semibold">Latest end-of-day scan</h2><p className="mt-1 text-sm text-slate-500">Candidates are research priorities. Advisory waits for your fill; GTT Assisted requires a manually confirmed below-trigger Kite LTP; Paper Auto uses official Connect quotes.</p></div>
                 {latestScan ? <RegimeBadge regime={latestScan.market_regime} /> : null}
@@ -577,7 +642,12 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
             </> : <p className="mt-3 text-sm text-slate-500">No morning-monitor run has been published since the heartbeat migration was applied.</p>}
         </section>
 
-        <section className="mt-6">
+        <section className="mt-6 rounded-xl border border-slate-200 bg-white p-5" aria-labelledby="technical-watchlist-title">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Research layer</p><h2 id="technical-watchlist-title" className="mt-1 text-lg font-semibold">Technical watchlist</h2><p className="mt-1 text-sm text-slate-500">These stocks passed the chart-quality gates. Portfolio limits may still prevent an actionable entry.</p></div><span className="text-sm text-slate-500">{technicalSetups.length} retained from this scan</span></div>
+            {technicalSetups.length ? <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{technicalSetups.map((setup) => <div key={setup.id} className="rounded-xl border border-slate-200 p-4"><div className="flex items-start justify-between gap-3"><div><p className="font-semibold">{setup.symbol}</p><p className="text-xs text-slate-500">{setup.company_name} · {setup.sector ?? "Unclassified"}</p></div><span className={`rounded-full px-2 py-1 text-[11px] font-semibold uppercase ${setup.actionability_status === "actionable" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{setup.actionability_status.replaceAll("_", " ")}</span></div><div className="mt-3 grid grid-cols-3 gap-2 text-sm"><SmallMetric label="Score" value={num(setup.setup_score).toFixed(0)} /><SmallMetric label="Trigger" value={decimalMoney(setup.entry_trigger)} /><SmallMetric label="Qty" value={String(setup.suggested_quantity)} /></div>{stringList(setup.execution_block_reasons).length ? <p className="mt-3 text-xs text-amber-800">{stringList(setup.execution_block_reasons).join(" ")}</p> : <p className="mt-3 text-xs text-emerald-700">Eligible for the actionable-candidate layer.</p>}</div>)}</div> : <p className="mt-4 rounded-lg bg-slate-50 p-4 text-sm text-slate-500">No technical setup was retained from the latest completed scan.</p>}
+        </section>
+
+        <section id="setups" className="mt-6 scroll-mt-6">
             <div className="flex items-end justify-between gap-4"><div><h2 className="text-xl font-semibold">{candidateEntryAllowed ? "Actionable candidates" : "Candidates for review"}</h2><p className="mt-1 text-sm text-slate-500">{candidateEntryAllowed ? "Review the conditional entry, maximum acceptable price, stop and expiry before acting." : "Older candidates remain visible for context, but entry confirmation is disabled until scan validity is restored."}</p></div><span className="text-sm text-slate-500">{activeCandidates.length} active</span></div>
             {candidateEntryBlockedReason ? <div role="alert" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><p className="font-semibold">New entries are temporarily disabled</p><p className="mt-1">{candidateEntryBlockedReason}</p></div> : null}
             {paperAutoArmed ? <div role="status" className="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900"><p className="font-semibold">Paper Auto is watching eligible candidates</p><p className="mt-1">Manual entry confirmation is disabled while armed to prevent duplicate tracking. No Kite order will be placed.</p></div> : null}
@@ -585,15 +655,17 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
             {activeCandidates.length ? <div className="mt-4 grid gap-4 xl:grid-cols-2">{activeCandidates.map((candidate) => <CandidateCard key={candidate.id} candidate={candidate} settings={settings} today={currentIndiaDate} entryAllowed={candidateEntryAllowed && !paperAutoArmed && !liveModeArmed} entryBlockedReason={paperAutoArmed ? "Paper Auto is armed and watching this candidate for a fresh live trigger crossing." : liveModeArmed ? "A live execution mode is armed and owns candidate entry processing." : candidateEntryBlockedReason} carriedForward={Boolean(latestScan && candidate.scan_id !== latestScan.id)} gttAssistedAvailable={automation.market_data_plan === "personal" && automation.gtt_assisted_enabled && kiteConnected && gttWorkerFresh && gttWorker?.worker_status === "healthy" && gttWorker.kite_session_healthy && !automation.emergency_stop_active} hasOpenGtt={openGttCandidateIds.has(candidate.id)} />)}</div> : <div className="mt-4 rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">No active candidates. “No trade” is expected when the hard gates or setup quality are not satisfied.</div>}
         </section>
 
-        <section className="mt-8">
+        <section id="positions" className="mt-8 scroll-mt-6">
             <div><h2 className="text-xl font-semibold">Open positions</h2><p className="mt-1 text-sm text-slate-500">Manual records use your confirmed broker fills. Paper Auto records simulated live-quote fills and never sends an order.</p></div>
             {openTrades.length ? <div className="mt-4 grid gap-4 xl:grid-cols-2">{openTrades.map((trade) => <OpenTradeCard key={trade.id} trade={trade} today={currentIndiaDate} />)}</div> : <div className="mt-4 rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">No confirmed paper or live positions.</div>}
         </section>
 
-        <section className="mt-8 overflow-hidden rounded-xl border border-slate-200 bg-white">
+        <section id="journal" className="mt-8 scroll-mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white">
             <div className="border-b border-slate-100 px-5 py-4"><h2 className="text-lg font-semibold">Closed-trade journal</h2><p className="mt-1 text-sm text-slate-500">Use R-multiples and expectancy to judge the system after a meaningful sample, not one outcome.</p></div>
             {closedTrades.length ? <div className="overflow-x-auto"><table className="w-full min-w-[900px] text-left text-sm"><caption className="sr-only">Closed swing trades and realized performance</caption><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-3">Stock</th><th className="px-5 py-3">Mode</th><th className="px-5 py-3">Entry / exit</th><th className="px-5 py-3 text-right">Quantity</th><th className="px-5 py-3 text-right">Realized P&L</th><th className="px-5 py-3 text-right">Result</th><th className="px-5 py-3">Exit date</th></tr></thead><tbody className="divide-y divide-slate-100">{closedTrades.map((trade) => <tr key={trade.id}><td className="px-5 py-4"><p className="font-semibold">{trade.symbol}</p><p className="text-xs text-slate-500">{trade.company_name}</p></td><td className="px-5 py-4 uppercase"><p>{trade.trade_mode}</p><p className="text-xs text-slate-400">{trade.execution_source.replaceAll("_", " ")}</p></td><td className="px-5 py-4">{decimalMoney(trade.entry_price)} → {decimalMoney(trade.exit_price)}</td><td className="px-5 py-4 text-right">{trade.quantity}</td><ToneCell value={num(trade.realized_pnl_inr)} text={money(trade.realized_pnl_inr)} /><ToneCell value={num(trade.realized_r_multiple)} text={signed(trade.realized_r_multiple, "R")} /><td className="px-5 py-4">{date(trade.exit_date)}</td></tr>)}</tbody></table></div> : <p className="p-5 text-sm text-slate-500">Closed trades will appear here.</p>}
             {metrics.closedTrades > 0 ? <div className="grid gap-3 border-t border-slate-100 p-5 sm:grid-cols-2 lg:grid-cols-4"><SmallMetric label="Profit factor" value={metrics.profitFactor === null ? "N/A" : Number.isFinite(metrics.profitFactor) ? metrics.profitFactor.toFixed(2) : "∞"} /><SmallMetric label="Maximum drawdown" value={money(metrics.maximumDrawdownInr)} /><SmallMetric label="Winning trades" value={String(metrics.winningTrades)} /><SmallMetric label="Losing trades" value={String(metrics.losingTrades)} /></div> : null}
+            <div className="border-t border-slate-100 p-5"><h3 className="text-sm font-semibold">Candidate conversion · last {lifecycle.window_days} days</h3><p className="mt-1 text-xs text-slate-500">This measures how published actionable candidates progressed. Technical watchlist rows are excluded until they become published candidates.</p><div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><SmallMetric label="Published" value={String(lifecycle.published)} /><SmallMetric label="Triggered" value={`${lifecycle.triggered}${lifecycle.trigger_rate_percentage === null ? "" : ` · ${num(lifecycle.trigger_rate_percentage).toFixed(0)}%`}`} /><SmallMetric label="Entered" value={`${lifecycle.entered}${lifecycle.entry_rate_percentage === null ? "" : ` · ${num(lifecycle.entry_rate_percentage).toFixed(0)}% of triggers`}`} /><SmallMetric label="Expired / invalid" value={`${lifecycle.expired} / ${lifecycle.invalidated}`} /><SmallMetric label="Median trigger time" value={lifecycle.median_hours_to_trigger === null ? "Not enough data" : `${num(lifecycle.median_hours_to_trigger).toFixed(1)} hours`} /></div></div>
+            {scorecards.length ? <div className="border-t border-slate-100 p-5"><h3 className="text-sm font-semibold">Performance by execution mode</h3><p className="mt-1 text-xs text-slate-500">Manual, Paper Auto, GTT Assisted and live execution are kept separate so simulated evidence cannot inflate real-money results.</p><div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{scorecards.map((card) => <div key={card.source} className="rounded-lg border border-slate-200 p-3"><p className="text-xs font-semibold uppercase text-slate-500">{card.source.replaceAll("_", " ")}</p><p className={`mt-1 text-lg font-bold ${num(card.net_pnl_inr) > 0 ? "text-emerald-700" : num(card.net_pnl_inr) < 0 ? "text-red-700" : "text-slate-900"}`}>{money(card.net_pnl_inr)}</p><p className="mt-1 text-xs text-slate-500">{card.closed_trades} closed · {card.open_trades} open · {card.expectancy_r === null ? "expectancy unavailable" : `${signed(card.expectancy_r, "R")} expectancy`} · {card.win_rate_percentage === null ? "win rate unavailable" : `${num(card.win_rate_percentage).toFixed(0)}% wins`}</p></div>)}</div></div> : null}
         </section>
 
         <section className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white">
@@ -610,7 +682,16 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
 
         {inactiveCandidates.length > 0 ? <details className="mt-6 rounded-xl border border-slate-200 bg-white p-5"><summary className="cursor-pointer font-semibold">Recently skipped, expired or invalidated candidates</summary><div className="mt-4 space-y-2">{inactiveCandidates.map((candidate) => <div key={candidate.id} className="flex flex-col gap-1 rounded-lg bg-slate-50 p-3 text-sm sm:flex-row sm:items-center sm:justify-between"><span><strong>{candidate.symbol}</strong> · {candidate.status}</span><span className="text-slate-500">{candidate.invalidation_reason ?? `Score ${num(candidate.setup_score).toFixed(0)}`}</span></div>)}</div></details> : null}
 
-        <section className="mt-8 rounded-xl border border-slate-200 bg-white p-5">
+        <section id="automation" className="mt-8 scroll-mt-6" aria-labelledby="automation-title">
+            <div className="mb-4"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Execution control centre</p><h2 id="automation-title" className="mt-1 text-xl font-semibold">Automation and Kite</h2><p className="mt-1 text-sm text-slate-500">Start with the connection, then use only the execution path supported by your Kite plan. Advanced rollout evidence is collapsed at the end.</p></div>
+            <KiteConnectionCard connection={kiteConnection} configured={kiteConfiguration.configured} worker={kiteWorker} workerFresh={kiteWorkerFresh} account={kiteAccount} reconciliation={kiteReconciliation} reconciliationRows={kiteReconciliationRows} />
+            <GttAssistedCard controls={automation} worker={gttWorker} workerFresh={gttWorkerFresh} entries={gttEntries} kiteConnected={kiteConnected} />
+            <PaperAutoCard controls={automation} worker={paperWorker} workerFresh={paperWorkerFresh} events={paperEvents} kiteConnected={kiteConnected} today={currentIndiaDate} />
+            <LiveExecutionCard controls={automation} worker={liveWorker} workerFresh={liveWorkerFresh} intents={liveIntents} orders={liveOrders} protections={liveProtections} riskLocks={liveRiskLocks} today={currentIndiaDate} />
+            <details className="rounded-xl border border-slate-200 bg-white p-4"><summary className="cursor-pointer font-semibold">Advanced rollout readiness and limits</summary><div className="mt-4"><SwingRolloutReadinessCard controls={automation} readiness={readiness} /></div></details>
+        </section>
+
+        <section id="settings" className="mt-8 scroll-mt-6 rounded-xl border border-slate-200 bg-white p-5">
             <h2 className="text-lg font-semibold">Swing Lab risk settings</h2>
             <p className="mt-1 text-sm text-slate-500">These settings control suggested quantities and analyzer candidate gates. Start in paper mode.</p>
             <div className="mt-4 grid gap-3 sm:grid-cols-3"><SmallMetric label="Capital available per slot" value={money(slotCapital)} /><SmallMetric label="Configured risk budget" value={money(riskBudget)} /><SmallMetric label="Current regime risk budget" value={money(effectiveRiskBudget)} /></div>
@@ -935,6 +1016,7 @@ function KiteConnectionCard({ connection, configured, worker, workerFresh, accou
             {connection && status !== "disconnected" ? <form action={disconnectKiteAccount}><ConfirmSubmitButton confirmation="Remove the locally stored Kite session? Swing automation will remain advisory and disarmed." pendingText="Removing session...">Remove stored session</ConfirmSubmitButton></form> : null}
             <p className="flex items-center gap-2 text-xs text-slate-500"><ShieldCheck className="h-4 w-4 text-emerald-600" />Encrypted token · daily expiry · read-only reconciliation · separate locked execution worker</p>
         </div>
+        {connection?.broker_user_id ? <details className="mt-4 rounded-lg border border-slate-200 p-3"><summary className="cursor-pointer text-xs font-medium text-slate-600">Connect a different Kite account</summary><p className="mt-2 text-xs text-slate-500">For safety, the first verified broker user is pinned. Reset is allowed only after every execution mode is disarmed and no live order, position, entry GTT, or protection remains.</p><form action={resetKiteBrokerIdentity} className="mt-3"><ConfirmSubmitButton confirmation="Reset the pinned Kite account identity? This removes the stored session and requires a fresh explicit connection." pendingText="Resetting broker identity..." className="border-red-200 text-red-700 hover:bg-red-50">Reset pinned account</ConfirmSubmitButton></form></details> : null}
     </section>;
 }
 
@@ -961,7 +1043,7 @@ function CandidateCard({ candidate, settings, today, entryAllowed, entryBlockedR
         <div className="mt-4 rounded-lg bg-slate-50 p-3 text-sm text-slate-600"><p><strong>Planned risk:</strong> {money(risk)} · <strong>Risk/share:</strong> {decimalMoney(candidate.risk_per_share)}. Manual and quote-driven modes follow protective-stop, trailing-stop and time-review rules. Personal Free GTT Assisted uses a fixed 2R OCO target because it has no live quote feed.</p>{stringList(candidate.reasons).length ? <ul className="mt-2 space-y-1 text-xs">{stringList(candidate.reasons).map((reason) => <li key={reason}>• {reason}</li>)}</ul> : null}</div>
         {hasOpenGtt ? <div role="status" className="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900"><p className="font-semibold">GTT Assisted owns this candidate</p><p className="mt-1">Do not enter it manually. Review or cancel the broker trigger in the GTT Assisted activity panel.</p></div> : null}
         {entryAllowed && gttAssistedAvailable && !testOnly && !hasOpenGtt ? <details className="mt-4 rounded-lg border border-blue-200 p-3"><summary className="cursor-pointer text-sm font-semibold text-blue-900">Approve a Personal Free entry GTT</summary><form action={createSwingGttAssistedEntry} className="mt-4 space-y-3"><input type="hidden" name="candidate_id" value={candidate.id} /><label className="block text-sm font-medium text-slate-700">Current LTP shown in Kite<input name="current_ltp" type="number" min={num(candidate.initial_stop) + 0.01} max={num(candidate.entry_trigger) - 0.01} step="0.01" required placeholder={`Must be below ${num(candidate.entry_trigger).toFixed(2)}`} className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 outline-none focus:ring-2 focus:ring-blue-300" /></label><p className="text-xs text-slate-500">Enter this manually from Kite between 09:20 and 15:05 IST. The database calculates the final quantity using the lower of suggested quantity, available cash, deployment cap and stop-risk limit.</p><ConfirmSubmitButton confirmation={`Approve a broker-hosted BUY GTT for ${candidate.symbol}? Zerodha may place a limit order when ${decimalMoney(candidate.entry_trigger)} is reached, capped at ${decimalMoney(candidate.maximum_entry)}.`} pendingText="Approving entry GTT..." className="w-full border-blue-300 bg-blue-700 text-white hover:bg-blue-800">Approve entry GTT</ConfirmSubmitButton></form></details> : null}
-        {entryAllowed && !hasOpenGtt ? <details className="mt-4 rounded-lg border border-slate-200 p-3"><summary className="cursor-pointer text-sm font-semibold">Confirm that I entered this trade</summary><form action={confirmSwingEntry} className="mt-4 grid gap-3 sm:grid-cols-2"><input type="hidden" name="candidate_id" value={candidate.id} /><NumberField name="entry_price" label={testOnly ? "Paper fill price" : "Actual fill price"} value={num(candidate.entry_trigger)} min={0.01} step={0.01} /><NumberField name="quantity" label="Actual quantity" value={suggestedQuantity} min={1} step={1} /><DateField name="entry_date" label="Entry date" value={today} />{testOnly ? <><input type="hidden" name="trade_mode" value="paper" /><div className="rounded-lg bg-violet-50 p-3 text-sm font-medium text-violet-800">Trade mode: Paper only</div></> : <label className="block text-sm font-medium text-slate-700">Trade mode<select name="trade_mode" defaultValue={settings.paper_mode ? "paper" : "live"} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2"><option value="paper">Paper</option><option value="live">Live</option></select></label>}<label className="block text-sm font-medium text-slate-700 sm:col-span-2">Note<input name="notes" placeholder="Optional entry note" className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2" /></label><div className="sm:col-span-2"><FormSubmitButton pendingText="Confirming entry...">{testOnly ? "Start test paper tracking" : "Start tracking actual entry"}</FormSubmitButton></div></form></details> : !hasOpenGtt ? <div role="status" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><p className="font-semibold">Entry confirmation unavailable</p><p className="mt-1">{entryBlockedReason ?? "Wait for a valid fresh scan before entering this candidate."}</p></div> : null}
+        {entryAllowed && triggered && !hasOpenGtt ? <details className="mt-4 rounded-lg border border-emerald-200 p-3"><summary className="cursor-pointer text-sm font-semibold text-emerald-900">Confirm my actual broker fill</summary><form action={confirmSwingEntry} className="mt-4 grid gap-3 sm:grid-cols-2"><input type="hidden" name="candidate_id" value={candidate.id} /><NumberField name="entry_price" label={testOnly ? "Paper fill price" : "Actual fill price"} value={num(candidate.entry_trigger)} min={0.01} step={0.01} /><NumberField name="quantity" label="Actual quantity" value={suggestedQuantity} min={1} step={1} /><DateField name="entry_date" label="Entry date" value={today} />{testOnly ? <><input type="hidden" name="trade_mode" value="paper" /><div className="rounded-lg bg-violet-50 p-3 text-sm font-medium text-violet-800">Trade mode: Paper only</div></> : <label className="block text-sm font-medium text-slate-700">Trade mode<select name="trade_mode" defaultValue={settings.paper_mode ? "paper" : "live"} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2"><option value="paper">Paper</option><option value="live">Live</option></select></label>}<label className="block text-sm font-medium text-slate-700 sm:col-span-2">Note<input name="notes" placeholder="Optional entry note" className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2" /></label><div className="sm:col-span-2"><FormSubmitButton pendingText="Confirming entry...">{testOnly ? "Start test paper tracking" : "Start tracking actual entry"}</FormSubmitButton></div></form></details> : entryAllowed && !triggered && !hasOpenGtt ? <div role="status" className="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900"><p className="font-semibold">Ready setup — waiting for trigger</p><p className="mt-1">The morning monitor must observe the entry trigger before a manual fill can be recorded. You may still approve a same-session GTT Assisted trigger above.</p></div> : !hasOpenGtt ? <div role="status" className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><p className="font-semibold">Entry confirmation unavailable</p><p className="mt-1">{entryBlockedReason ?? "Wait for a valid fresh scan before entering this candidate."}</p></div> : null}
         {!hasOpenGtt ? <form action={skipSwingCandidate} className="mt-3 flex flex-col gap-2 sm:flex-row"><input type="hidden" name="candidate_id" value={candidate.id} /><input name="reason" placeholder="Optional skip reason" className="min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm" /><ConfirmSubmitButton confirmation={`Skip ${candidate.symbol}?`} pendingText="Skipping...">Skip candidate</ConfirmSubmitButton></form> : null}
     </article>;
 }
@@ -987,6 +1069,10 @@ function OpenTradeCard({ trade, today }: { trade: Trade; today: string }) {
 function Summary({ label, value, helper, tone }: { label: string; value: string; helper: string; tone?: "good" | "bad" | "warn" }) {
     const color = tone === "good" ? "text-emerald-700" : tone === "bad" ? "text-red-700" : tone === "warn" ? "text-amber-700" : "text-slate-950";
     return <div className="rounded-xl border border-slate-200 bg-white p-5"><p className="text-sm font-medium text-slate-500">{label}</p><p className={`mt-2 text-2xl font-bold ${color}`}>{value}</p><p className="mt-1 text-sm text-slate-500">{helper}</p></div>;
+}
+
+function QuickState({ label, value, tone }: { label: string; value: string; tone?: "good" }) {
+    return <div className={`rounded-lg border px-4 py-3 ${tone === "good" ? "border-emerald-200 bg-emerald-50" : "border-slate-200 bg-white"}`}><p className="text-xs text-slate-500">{label}</p><p className={`mt-1 text-xl font-bold ${tone === "good" ? "text-emerald-700" : "text-slate-950"}`}>{value}</p></div>;
 }
 
 function SmallMetric({ label, value }: { label: string; value: string }) {

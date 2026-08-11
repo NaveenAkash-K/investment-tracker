@@ -17,10 +17,10 @@ The Targets page includes a new-money allocation autopilot. It uses the entered 
 
 1. Install packages with `npm install`.
 2. Add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` to `.env.local`.
-3. For a new Supabase project, apply every SQL file in `supabase/migrations` in filename order, starting with [the initial schema](supabase/migrations/202607190001_initial_schema.sql). For an existing installation, apply only migrations newer than the last one already run. The current final migration is [the credential-gate cleanup](supabase/migrations/202608100003_remove_credential_rotation_gate.sql).
+3. For a new Supabase project, apply every SQL file in `supabase/migrations` in filename order, starting with [the initial schema](supabase/migrations/202607190001_initial_schema.sql). For an existing installation, apply only migrations newer than the last one already run. The current final migration is [Swing observability and durable delivery](supabase/migrations/202608110002_swing_observability_and_delivery.sql).
 4. Run `npm run dev` and open `http://localhost:3000`.
 
-Migrations are transactional. The Kite migrations add the fail-closed Swing execution data model, isolate encrypted sessions from browser access, support read-only static-IP reconciliation, simulated Paper Auto, Assisted Live approvals, and capped Live Auto with broker transport restricted to the VPS service role.
+Migrations are transactional. The Kite migrations add the fail-closed Swing execution data model, isolate encrypted sessions from browser access, support read-only static-IP reconciliation, simulated Paper Auto, Personal Free GTT Assisted, Assisted Live approvals, and capped Live Auto with broker transport restricted to the VPS service role. The final hardening migrations pin broker identity, prioritize reduce-only exits, account for broker charges and partial realizations, retain technical watchlists separately from actionable candidates, and claim news delivery before SMTP.
 
 ## Market Intelligence integration
 
@@ -38,7 +38,7 @@ The integration uses the shared versioned contract in `contracts/analyzer-tracke
 
 Swing Lab is a separate risk budget and journal for end-of-day Indian-equity swing trades. It does not change long-term holdings, SIP allocations, or Monthly Review.
 
-1. Apply all migrations through the second rereview fixes migration. The 09:25 IST weekday monitor checks only existing candidates and positions; the 17:30 IST workflow calculates completed-session regime and candidates. The 08:00 IST portfolio workflow is a separate operation and cannot publish Swing results.
+1. Apply all migrations through `202608110002_swing_observability_and_delivery.sql`. The 09:25 IST weekday monitor checks only existing candidates and positions; the 17:30 IST workflow calculates completed-session regime, technical setups and actionable candidates. The 08:00 IST portfolio workflow is a separate operation and cannot publish Swing results.
 2. Set trading capital, risk per trade, position limits, sector limit, and the minimum setup score in **Swing Lab → Risk controls**. Keep paper mode on while validating the process.
 3. A candidate is only a plan. Buy only after its entry trigger trades and never above the displayed maximum-entry price. Carried-forward candidates remain visible, but entry confirmation is disabled when the latest scan is failed, stale, unpublished, or unsupported.
 4. In Advisory mode, confirm an actual or manual paper fill in Swing Lab. When Paper Auto is armed, a fresh Kite trigger crossing can create a simulated paper trade automatically.

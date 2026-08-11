@@ -71,6 +71,14 @@ export async function disconnectKiteAccount() {
     }, "The stored Kite session was removed. Swing automation remains advisory and disarmed.");
 }
 
+export async function resetKiteBrokerIdentity() {
+    await execute(async () => {
+        const supabase = await authenticatedClient();
+        const { error } = await supabase.rpc("reset_kite_broker_identity");
+        if (error) throw new Error(error.message);
+    }, "The pinned Kite account identity and stored session were reset. Reconnect explicitly before using broker features.");
+}
+
 export async function configureSwingPaperAuto(formData: FormData) {
     const action = required(formData, "action");
     await execute(async () => {

@@ -22,7 +22,7 @@ const contract = JSON.parse(contractBytes.toString("utf8")) as {
 test("Tracker contract constants match the checked-in JSON contract", () => {
     assert.equal(
         createHash("sha256").update(contractBytes).digest("hex"),
-        "c8cb8511c0b2e56e2c16172a74932fc01395944c70473688a44ab6976af7fa46"
+        "546100cd02a0f3f3df30ebb1b2761ff292e0048d2bc23bba4124aeb3c2e455d0"
     );
     assert.equal(contract.contract_version, ANALYZER_CONTRACT_VERSION);
     assert.equal(contract.legacy_version, LEGACY_ANALYZER_CONTRACT_VERSION);
