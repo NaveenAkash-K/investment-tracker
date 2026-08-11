@@ -10,6 +10,10 @@ const observability = readFileSync(
     "supabase/migrations/202608110002_swing_observability_and_delivery.sql",
     "utf8",
 );
+const residual = readFileSync(
+    "supabase/migrations/202608110003_rereview_residual_hardening.sql",
+    "utf8",
+);
 
 test("broker identity is pinned and has an explicit audited reset", () => {
     assert.match(safety, /enforce_kite_broker_identity_pin/);
@@ -43,4 +47,15 @@ test("news alert delivery is claimed before SMTP completion", () => {
     assert.match(observability, /claim_news_alert_delivery/);
     assert.match(observability, /complete_news_alert_delivery/);
     assert.match(observability, /status = 'sending'/);
+});
+
+test("residual hardening closes claim, publication, backup and delivery gaps", () => {
+    assert.match(residual, /live_max_open_positions/);
+    assert.match(residual, /live_max_new_entries_per_day/);
+    assert.match(residual, /Available broker cash became insufficient/);
+    assert.match(residual, /ingest_swing_lab_scan_with_watchlist/);
+    assert.match(residual, /case when t\.execution_source = 'manual'/);
+    assert.match(residual, /restore_complete_portfolio_backup_v12/);
+    assert.match(residual, /status = 'uncertain'/);
+    assert.match(residual, /charges_status in \('unavailable','partial','broker_calculated','estimated'\)/);
 });

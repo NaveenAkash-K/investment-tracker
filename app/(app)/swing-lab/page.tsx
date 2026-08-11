@@ -283,6 +283,9 @@ type TechnicalSetup = {
     suggested_quantity: number;
     actionability_status: string;
     execution_block_reasons: unknown;
+    outcome_status: "unobserved" | "triggered" | "expired" | "invalidated" | "entered" | "missed";
+    outcome_reason: string | null;
+    outcome_at: string | null;
 };
 type PerformanceScorecard = {
     source: string;
@@ -416,7 +419,7 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
         supabase.from("swing_broker_orders").select("id, intent_id, broker_order_id, status, quantity, filled_quantity, average_price, status_message, updated_at").eq("user_id", user.id).order("updated_at", { ascending: false }).limit(30),
         supabase.from("swing_protective_orders").select("id, trade_id, broker_trigger_id, status, protected_quantity, trigger_price, limit_price, last_verified_at, failure_reason").eq("user_id", user.id).order("updated_at", { ascending: false }).limit(30),
         supabase.from("swing_risk_control_activations").select("id, control_type, reason, activated_at").eq("user_id", user.id).eq("status", "active").order("activated_at", { ascending: false }).limit(20),
-        supabase.from("swing_setup_watchlist").select("id, scan_id, signal_key, symbol, company_name, sector, setup_score, setup_as_of, expires_on, market_regime, close_price, entry_trigger, maximum_entry, initial_stop, suggested_quantity, actionability_status, execution_block_reasons").eq("user_id", user.id).order("setup_score", { ascending: false }).limit(20),
+        supabase.from("swing_setup_watchlist").select("id, scan_id, signal_key, symbol, company_name, sector, setup_score, setup_as_of, expires_on, market_regime, close_price, entry_trigger, maximum_entry, initial_stop, suggested_quantity, actionability_status, execution_block_reasons, outcome_status, outcome_reason, outcome_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(100),
         supabase.rpc("get_swing_performance_scorecards"),
         supabase.rpc("get_swing_candidate_lifecycle_scorecard"),
     ]);
@@ -458,8 +461,10 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
     const liveOrders = (liveOrdersResult.data ?? []) as LiveBrokerOrder[];
     const liveProtections = (liveProtectionsResult.data ?? []) as LiveProtection[];
     const liveRiskLocks = (liveRiskLocksResult.data ?? []) as LiveRiskLock[];
-    const technicalSetups = ((watchlistResult.data ?? []) as TechnicalSetup[])
+    const allTechnicalSetups = (watchlistResult.data ?? []) as TechnicalSetup[];
+    const technicalSetups = allTechnicalSetups
         .filter((setup) => setup.scan_id === latestScan?.id);
+    const shadowOutcomes = allTechnicalSetups.filter((setup) => setup.outcome_status !== "unobserved");
     const scorecards = (scorecardsResult.data ?? []) as PerformanceScorecard[];
     const lifecycle = (lifecycleResult.data ?? {
         window_days: 180, published: 0, triggered: 0, entered: 0, expired: 0, invalidated: 0,
@@ -645,6 +650,7 @@ export default async function SwingLabPage({ searchParams }: { searchParams: Sea
         <section className="mt-6 rounded-xl border border-slate-200 bg-white p-5" aria-labelledby="technical-watchlist-title">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Research layer</p><h2 id="technical-watchlist-title" className="mt-1 text-lg font-semibold">Technical watchlist</h2><p className="mt-1 text-sm text-slate-500">These stocks passed the chart-quality gates. Portfolio limits may still prevent an actionable entry.</p></div><span className="text-sm text-slate-500">{technicalSetups.length} retained from this scan</span></div>
             {technicalSetups.length ? <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{technicalSetups.map((setup) => <div key={setup.id} className="rounded-xl border border-slate-200 p-4"><div className="flex items-start justify-between gap-3"><div><p className="font-semibold">{setup.symbol}</p><p className="text-xs text-slate-500">{setup.company_name} · {setup.sector ?? "Unclassified"}</p></div><span className={`rounded-full px-2 py-1 text-[11px] font-semibold uppercase ${setup.actionability_status === "actionable" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{setup.actionability_status.replaceAll("_", " ")}</span></div><div className="mt-3 grid grid-cols-3 gap-2 text-sm"><SmallMetric label="Score" value={num(setup.setup_score).toFixed(0)} /><SmallMetric label="Trigger" value={decimalMoney(setup.entry_trigger)} /><SmallMetric label="Qty" value={String(setup.suggested_quantity)} /></div>{stringList(setup.execution_block_reasons).length ? <p className="mt-3 text-xs text-amber-800">{stringList(setup.execution_block_reasons).join(" ")}</p> : <p className="mt-3 text-xs text-emerald-700">Eligible for the actionable-candidate layer.</p>}</div>)}</div> : <p className="mt-4 rounded-lg bg-slate-50 p-4 text-sm text-slate-500">No technical setup was retained from the latest completed scan.</p>}
+            {shadowOutcomes.length ? <div className="mt-4 border-t border-slate-100 pt-4"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Recent shadow outcomes</p><div className="mt-3 grid gap-2 sm:grid-cols-4"><SmallMetric label="Triggered" value={String(shadowOutcomes.filter((row) => row.outcome_status === "triggered").length)} /><SmallMetric label="Expired" value={String(shadowOutcomes.filter((row) => row.outcome_status === "expired").length)} /><SmallMetric label="Invalidated" value={String(shadowOutcomes.filter((row) => row.outcome_status === "invalidated").length)} /><SmallMetric label="Triggered but missed" value={String(shadowOutcomes.filter((row) => row.outcome_status === "missed").length)} /></div><p className="mt-2 text-xs text-slate-500">Research outcomes for technically valid but non-actionable setups. They never create a trade.</p></div> : null}
         </section>
 
         <section id="setups" className="mt-6 scroll-mt-6">

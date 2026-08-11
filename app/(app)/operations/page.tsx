@@ -3,7 +3,10 @@ import Link from "next/link";
 import { AlertTriangle, CheckCircle2, Clock3 } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { PageHeader } from "@/components/page-header";
+import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
+import { FormSubmitButton } from "@/components/form-submit-button";
 import { getIndiaDate, getLatestExpectedDailyRunDate, getLatestExpectedWeekdayRunDate } from "@/lib/performance";
+import { resolveNewsDelivery } from "./actions";
 
 type Health = "healthy" | "warning" | "failed";
 type Run = { as_of: string; status: string; contract_version: string | null; publication_status: string | null; data_issues: unknown };
@@ -28,15 +31,16 @@ export default async function OperationsPage() {
     const { data: { user }, error } = await supabase.auth.getUser();
     if (error || !user) redirect("/auth/login");
 
-    const [portfolioResult, scanResult, monitorResult, newsResult, sourcesResult, deliveriesResult] = await Promise.all([
+    const [portfolioResult, scanResult, monitorResult, newsResult, sourcesResult, deliveriesResult, newsDeliveriesResult] = await Promise.all([
         supabase.from("market_signal_runs").select("as_of, status, contract_version, publication_status, data_issues").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
         supabase.from("swing_scan_runs").select("as_of, status, contract_version, publication_status, data_issues").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
         supabase.from("swing_monitor_runs").select("as_of, status, contract_version, publication_status, data_issues").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
         supabase.from("news_pipeline_runs").select("as_of, status, contract_version, publication_status, data_issues").eq("user_id", user.id).order("as_of", { ascending: false }).limit(1).maybeSingle(),
         supabase.from("news_sources").select("id, name, last_success_at, last_error, consecutive_failures").eq("user_id", user.id).eq("is_active", true).order("name"),
         supabase.from("analyzer_notification_deliveries").select("id, channel, status, attempt_count, claimed_at, error_message").eq("user_id", user.id).in("status", ["claimed", "uncertain"]).order("claimed_at", { ascending: false }).limit(50),
+        supabase.from("market_event_alerts").select("id, alert_key, alert_type, status, delivery_claimed_at, delivery_attempt_count, delivery_error").eq("user_id", user.id).in("status", ["sending", "uncertain"]).order("delivery_claimed_at", { ascending: false }).limit(50),
     ]);
-    const queryError = portfolioResult.error || scanResult.error || monitorResult.error || newsResult.error || sourcesResult.error || deliveriesResult.error;
+    const queryError = portfolioResult.error || scanResult.error || monitorResult.error || newsResult.error || sourcesResult.error || deliveriesResult.error || newsDeliveriesResult.error;
     if (queryError) return <main className="mx-auto max-w-5xl px-4 py-8"><PageHeader title="Analyzer Operations" description="Automation and publication health." /><div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-900">{queryError.message}</div></main>;
 
     const now = new Date();
@@ -56,13 +60,41 @@ export default async function OperationsPage() {
     ];
     const unhealthySources = (sourcesResult.data ?? []).filter((source) => source.last_error || Number(source.consecutive_failures) > 0);
     const deliveries = deliveriesResult.data ?? [];
+    const newsDeliveries = newsDeliveriesResult.data ?? [];
     const healthyCount = items.filter((item) => item.health === "healthy").length;
 
     return <main><div className="mx-auto max-w-6xl px-4 py-8">
         <PageHeader title="Analyzer Operations" description="One place to verify scheduled runs, data-source health, publication contracts and unresolved deliveries." />
-        <section className="grid gap-4 sm:grid-cols-3"><Metric label="Healthy workflows" value={`${healthyCount}/${items.length}`} /><Metric label="Source problems" value={String(unhealthySources.length)} warn={unhealthySources.length > 0} /><Metric label="Unresolved deliveries" value={String(deliveries.length)} warn={deliveries.length > 0} /></section>
-        <section className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white"><div className="border-b border-slate-100 px-5 py-4"><h2 className="text-lg font-semibold">Workflow publications</h2><p className="mt-1 text-sm text-slate-500">Expected times include a grace period. This confirms Tracker publication, not GitHub’s internal job state.</p></div><div className="divide-y divide-slate-100">{items.map((item) => <HealthRow key={item.name} {...item} />)}</div></section>
-        <section className="mt-6 grid gap-6 lg:grid-cols-2"><div className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="text-lg font-semibold">Source health</h2>{unhealthySources.length ? <div className="mt-4 space-y-3">{unhealthySources.map((source) => <div key={source.id} className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><p className="font-semibold">{source.name}</p><p className="mt-1">{source.last_error ?? `${source.consecutive_failures} consecutive failures`}</p><p className="mt-1 text-xs">Last success: {time(source.last_success_at)}</p></div>)}</div> : <p className="mt-4 text-sm text-emerald-700">All active news sources report no unresolved fetch error.</p>}</div><div className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="text-lg font-semibold">Delivery recovery</h2>{deliveries.length ? <div className="mt-4 space-y-3">{deliveries.map((delivery) => <div key={delivery.id} className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm"><p className="font-semibold uppercase text-amber-900">{delivery.channel} · {delivery.status}</p><p className="mt-1 text-amber-800">{delivery.error_message ?? `Claimed at ${time(delivery.claimed_at)}`}</p><p className="mt-1 text-xs text-amber-700">Attempts: {delivery.attempt_count}</p></div>)}</div> : <p className="mt-4 text-sm text-emerald-700">No claimed or uncertain notification delivery needs review.</p>}<Link href="/market-intelligence" className="mt-4 inline-flex text-sm font-semibold text-blue-700 hover:underline">Open delivery recovery controls</Link></div></section>
+        <section className="grid gap-4 sm:grid-cols-3">
+            <Metric label="Healthy workflows" value={`${healthyCount}/${items.length}`} />
+            <Metric label="Source problems" value={String(unhealthySources.length)} warn={unhealthySources.length > 0} />
+            <Metric label="Unresolved deliveries" value={String(deliveries.length + newsDeliveries.length)} warn={deliveries.length + newsDeliveries.length > 0} />
+        </section>
+        <section className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <div className="border-b border-slate-100 px-5 py-4"><h2 className="text-lg font-semibold">Workflow publications</h2><p className="mt-1 text-sm text-slate-500">Expected times include a grace period. This confirms Tracker publication, not GitHub&apos;s internal job state.</p></div>
+            <div className="divide-y divide-slate-100">{items.map((item) => <HealthRow key={item.name} {...item} />)}</div>
+        </section>
+        <section className="mt-6 grid gap-6 lg:grid-cols-2">
+            <div className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="text-lg font-semibold">Source health</h2>{unhealthySources.length ? <div className="mt-4 space-y-3">{unhealthySources.map((source) => <div key={source.id} className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><p className="font-semibold">{source.name}</p><p className="mt-1">{source.last_error ?? `${source.consecutive_failures} consecutive failures`}</p><p className="mt-1 text-xs">Last success: {time(source.last_success_at)}</p></div>)}</div> : <p className="mt-4 text-sm text-emerald-700">All active news sources report no unresolved fetch error.</p>}</div>
+            <div className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="text-lg font-semibold">Analyzer delivery recovery</h2>{deliveries.length ? <div className="mt-4 space-y-3">{deliveries.map((delivery) => <div key={delivery.id} className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm"><p className="font-semibold uppercase text-amber-900">{delivery.channel} · {delivery.status}</p><p className="mt-1 text-amber-800">{delivery.error_message ?? `Claimed at ${time(delivery.claimed_at)}`}</p><p className="mt-1 text-xs text-amber-700">Attempts: {delivery.attempt_count}</p></div>)}</div> : <p className="mt-4 text-sm text-emerald-700">No analyzer notification delivery needs review.</p>}<Link href="/market-intelligence" className="mt-4 inline-flex text-sm font-semibold text-blue-700 hover:underline">Open analyzer delivery controls</Link></div>
+        </section>
+        {newsDeliveries.length ? <section className="mt-6 rounded-xl border border-amber-300 bg-amber-50 p-5">
+            <h2 className="font-semibold text-amber-950">Uncertain News & Events email</h2>
+            <p className="mt-1 text-sm text-amber-900">The SMTP request may have succeeded before its acknowledgement was recorded. Check your inbox first; the system will not retry these automatically.</p>
+            <div className="mt-4 space-y-3">{newsDeliveries.map((delivery) => {
+                const recoverable = delivery.status === "uncertain" || (delivery.delivery_claimed_at && now.getTime() - new Date(delivery.delivery_claimed_at).getTime() >= 30 * 60_000);
+                return <article key={delivery.id} className="rounded-lg border border-amber-200 bg-white p-4 text-sm">
+                <p className="font-semibold capitalize">{delivery.alert_type.replaceAll("_", " ")}</p>
+                <p className="mt-1 text-xs text-slate-500">{delivery.alert_key} · claimed {time(delivery.delivery_claimed_at)} · attempts {delivery.delivery_attempt_count}</p>
+                {delivery.delivery_error ? <p className="mt-2 text-xs text-amber-800">{delivery.delivery_error}</p> : null}
+                {recoverable ? <div className="mt-3 flex flex-wrap gap-2">
+                    <form action={resolveNewsDelivery}><input type="hidden" name="alert_id" value={delivery.id} /><input type="hidden" name="resolution" value="sent" /><FormSubmitButton pendingText="Saving...">Mark delivered</FormSubmitButton></form>
+                    <form action={resolveNewsDelivery}><input type="hidden" name="alert_id" value={delivery.id} /><input type="hidden" name="resolution" value="retry" /><ConfirmSubmitButton confirmation="Confirm the email is absent before allowing a future retry." pendingText="Saving...">Allow retry</ConfirmSubmitButton></form>
+                    <form action={resolveNewsDelivery}><input type="hidden" name="alert_id" value={delivery.id} /><input type="hidden" name="resolution" value="suppressed" /><ConfirmSubmitButton confirmation="Suppress this alert without retrying it?" pendingText="Saving...">Suppress</ConfirmSubmitButton></form>
+                </div> : <p className="mt-3 text-xs text-slate-500">This claim may still be active. Recovery controls become available after 30 minutes.</p>}
+            </article>;
+            })}</div>
+        </section> : null}
     </div></main>;
 }
 

@@ -85,3 +85,4 @@ jobs:
         run: |
           psql -v ON_ERROR_STOP=1 -f tests/postgres-second-rereview.sql
           psql -v ON_ERROR_STOP=1 -f tests/postgres-execution-safety.sql
+          psql -v ON_ERROR_STOP=1 -f tests/postgres-rereview-residual.sql

@@ -68,11 +68,11 @@ export async function restoreFullBackup(formData: FormData) {
 
     if (!backup || typeof backup !== "object") throw new Error("Invalid backup structure.");
     const record = backup as { format?: unknown; version?: unknown; data?: unknown };
-    if (record.format !== "investment-tracker-backup" || ![1, 2, 3, 4, 5].includes(Number(record.version)) || !record.data) {
+    if (record.format !== "investment-tracker-backup" || ![1, 2, 3, 4, 5, 6].includes(Number(record.version)) || !record.data) {
         throw new Error("This is not a supported Investment Tracker backup.");
     }
 
-    const { error } = await supabase.rpc("restore_complete_portfolio_backup_v11", { p_backup: backup });
+    const { error } = await supabase.rpc("restore_complete_portfolio_backup_v12", { p_backup: backup });
     if (error) throw new Error(error.message);
     revalidatePath("/", "layout");
     redirect("/import-export?restored=1");
